@@ -151,6 +151,9 @@ aiqa_transition_t aiqa_state_machine_dispatch(aiqa_state_machine_t *machine, aiq
         }
         break;
     case AIQA_STATE_THINKING:
+        if (event.type == AIQA_EVENT_CHAT_STARTED) {
+            return make_transition(machine, AIQA_STATE_THINKING, AIQA_ERROR_NONE, true);
+        }
         if (event.type == AIQA_EVENT_CHAT_TOKEN) {
             return make_transition(machine, AIQA_STATE_THINKING, AIQA_ERROR_NONE, true);
         }

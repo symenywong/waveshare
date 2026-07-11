@@ -20,6 +20,7 @@
 #include "freertos/task.h"
 #include "freertos/projdefs.h"
 
+#include <stdio.h>
 #include <string.h>
 
 static const char *TAG = "aiqa_runtime";
@@ -37,8 +38,7 @@ static const char *TAG = "aiqa_runtime";
 #define AIQA_TASK_STACK_CHAT 8192
 #define AIQA_TASK_STACK_ASR 8192
 #define AIQA_TASK_STACK_BUTTON 3072
-
-static const char *AIQA_FIXED_TEXT_PROMPT = "Introduce yourself as a tiny AI electronic pet and explain why rain happens in one short answer.";
+#define AIQA_RUNTIME_CHAT_PROMPT_MAX_LEN AIQA_ASR_RESPONSE_TEXT_MAX_LEN
 
 typedef struct {
     aiqa_state_t state;
@@ -51,11 +51,11 @@ typedef struct {
     aiqa_net_command_type_t type;
 } aiqa_net_command_t;
 
-typedef enum { AIQA_CHAT_COMMAND_FIXED_PROMPT = 0 } aiqa_chat_command_type_t;
+typedef enum { AIQA_CHAT_COMMAND_USER_PROMPT = 0 } aiqa_chat_command_type_t;
 
 typedef struct {
     aiqa_chat_command_type_t type;
-    const char *prompt;
+    char prompt[AIQA_RUNTIME_CHAT_PROMPT_MAX_LEN];
 } aiqa_chat_command_t;
 
 typedef enum {
@@ -75,16 +75,10 @@ typedef struct {
     const char *audio_ref;
 } aiqa_asr_command_t;
 
-static QueueHandle_t s_app_queue;
-static QueueHandle_t s_ui_queue;
-static QueueHandle_t s_net_queue;
-static QueueHandle_t s_chat_queue;
-static QueueHandle_t s_audio_queue;
-static QueueHandle_t s_asr_queue;
+static QueueHandle_t s_app_queue, s_ui_queue, s_net_queue, s_chat_queue, s_audio_queue, s_asr_queue;
 static aiqa_config_snapshot_t s_config_snapshot;
 static bool s_config_snapshot_ready;
-static bool s_fixed_prompt_sent;
-
+static char s_latest_transcript[AIQA_ASR_RESPONSE_TEXT_MAX_LEN];
 static esp_err_t init_nvs(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -176,6 +170,20 @@ static esp_err_t post_chat_command(aiqa_chat_command_t command)
     return ESP_OK;
 }
 
+static esp_err_t post_chat_prompt(const char *prompt)
+{
+    if (prompt == NULL || prompt[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    aiqa_chat_command_t command = {
+        .type = AIQA_CHAT_COMMAND_USER_PROMPT,
+        .prompt = {0},
+    };
+    (void)snprintf(command.prompt, sizeof(command.prompt), "%s", prompt);
+    return post_chat_command(command);
+}
+
 static esp_err_t post_audio_command(aiqa_audio_command_t command)
 {
     if (s_audio_queue == NULL) {
@@ -251,6 +259,19 @@ static void handle_asr_transition(aiqa_transition_t transition)
     }
 }
 
+static void handle_chat_prompt_transition(aiqa_transition_t transition, aiqa_event_t event)
+{
+    if (!transition.accepted || transition.next_state != AIQA_STATE_THINKING ||
+        event.type != AIQA_EVENT_ASR_DONE) {
+        return;
+    }
+
+    esp_err_t ret = post_chat_prompt(s_latest_transcript);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to post transcript chat prompt: %s", esp_err_to_name(ret));
+    }
+}
+
 esp_err_t aiqa_runtime_post_event(aiqa_event_t event)
 {
     if (s_app_queue == NULL) {
@@ -318,6 +339,7 @@ static void app_state_task(void *arg)
             post_ui_state(transition.next_state, transition.error);
             handle_recording_transition(transition);
             handle_asr_transition(transition);
+            handle_chat_prompt_transition(transition, event);
         }
 
         if (event.type == AIQA_EVENT_FACTORY_RESET) {
@@ -363,25 +385,6 @@ static void app_state_task(void *arg)
                     if (post_ret != ESP_OK) {
                         ESP_LOGE(TAG, "Failed to post network failure event: %s", esp_err_to_name(post_ret));
                     }
-                }
-            }
-        } else if (event.type == AIQA_EVENT_NETWORK_READY && !s_fixed_prompt_sent) {
-            s_fixed_prompt_sent = true;
-            aiqa_chat_command_t command = {
-                .type = AIQA_CHAT_COMMAND_FIXED_PROMPT,
-                .prompt = AIQA_FIXED_TEXT_PROMPT,
-            };
-            esp_err_t chat_ret = post_chat_command(command);
-            if (chat_ret != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to post chat command: %s", esp_err_to_name(chat_ret));
-                aiqa_event_t failed = {
-                    .type = AIQA_EVENT_CHAT_FAILED,
-                    .error = AIQA_ERROR_CHAT_FAILED,
-                    .value = (uint32_t)chat_ret,
-                };
-                post_ret = aiqa_runtime_post_event(failed);
-                if (post_ret != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to post chat failure event: %s", esp_err_to_name(post_ret));
                 }
             }
         }
@@ -692,6 +695,7 @@ static void asr_task(void *arg)
             command.audio_ref,
             &result);
         if (result.status == AIQA_ASR_OK) {
+            (void)snprintf(s_latest_transcript, sizeof(s_latest_transcript), "%s", result.text);
             ESP_LOGI("aiqa_asr", "ASR transcript ready: %u bytes", (unsigned)strlen(result.text));
         }
 
@@ -712,7 +716,7 @@ static void chat_task(void *arg)
         if (xQueueReceive(s_chat_queue, &command, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-        if (command.type != AIQA_CHAT_COMMAND_FIXED_PROMPT || command.prompt == NULL) {
+        if (command.type != AIQA_CHAT_COMMAND_USER_PROMPT || command.prompt[0] == '\0') {
             continue;
         }
         if (!s_config_snapshot_ready) {

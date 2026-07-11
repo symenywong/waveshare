@@ -39,7 +39,7 @@ On boot the current firmware prints:
 - AMOLED init status and pet expression-page updates
 - NVS provisioning status
 - Wi-Fi/SNTP network task status after provisioning
-- fixed-text Qwen chat bring-up status after network readiness
+- Qwen chat status after ASR transcript handoff
 - static Qwen ASR sample transcription status after PTT release
 
 Local host-side checks:
@@ -52,10 +52,6 @@ The firmware currently stops at `ERROR/CONFIG_MISSING` until the `aiqa` NVS
 namespace is provisioned with Wi-Fi credentials and a chat API key. The AMOLED
 screen shows a readable pet page; without provisioning it should display
 `AI PET`, `SETUP NEEDED`, `NVS CONFIG MISSING`, and `RUN PROVISION TOOL`.
-After provisioning and network readiness, the runtime sends one fixed pet
-prompt to the configured OpenAI-compatible Qwen endpoint, then maps the result
-back into the pet state machine.
-
 Long-pressing BOOT now drives the runtime into the `LISTENING` pet state and
 release moves it toward transcription. The actual ES7210/I2S PCM capture driver
 is still staged, so Phase 5 verifies interaction timing and bounded recording
@@ -64,6 +60,8 @@ For Phase 6, transcription uses a static public audio URL through Qwen ASR via
 the OpenAI-compatible `chat/completions` endpoint; this proves provider
 selection, TLS/HTTP behavior, and runtime ASR events before microphone PCM is
 available.
+For Phase 7, the ASR transcript is handed to the configured Qwen chat model and
+the result maps back into the pet state machine.
 
 ## Configuration
 

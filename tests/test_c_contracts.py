@@ -128,6 +128,40 @@ class CContractTests(unittest.TestCase):
             ["components/app_core/include"],
         )
 
+    def test_asr_done_can_drive_chat_started_without_race_warning(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_state_machine.h"
+                #include <assert.h>
+
+                static void dispatch(aiqa_state_machine_t *m, aiqa_event_type_t type, aiqa_state_t expected) {
+                    aiqa_event_t event = {.type = type, .error = AIQA_ERROR_NONE, .value = 0};
+                    aiqa_transition_t t = aiqa_state_machine_dispatch(m, event);
+                    assert(t.accepted);
+                    assert(m->state == expected);
+                }
+
+                int main(void) {
+                    aiqa_state_machine_t machine;
+                    aiqa_state_machine_init(&machine);
+                    dispatch(&machine, AIQA_EVENT_BOOTED, AIQA_STATE_CONFIG_CHECK);
+                    dispatch(&machine, AIQA_EVENT_CONFIG_READY, AIQA_STATE_NETWORK_CONNECTING);
+                    dispatch(&machine, AIQA_EVENT_NETWORK_READY, AIQA_STATE_IDLE);
+                    dispatch(&machine, AIQA_EVENT_PRESS_START, AIQA_STATE_RECORDING);
+                    dispatch(&machine, AIQA_EVENT_PRESS_END, AIQA_STATE_TRANSCRIBING);
+                    dispatch(&machine, AIQA_EVENT_ASR_STARTED, AIQA_STATE_TRANSCRIBING);
+                    dispatch(&machine, AIQA_EVENT_ASR_DONE, AIQA_STATE_THINKING);
+                    dispatch(&machine, AIQA_EVENT_CHAT_STARTED, AIQA_STATE_THINKING);
+                    dispatch(&machine, AIQA_EVENT_CHAT_DONE, AIQA_STATE_IDLE_WITH_RESULT);
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_state_machine.c"],
+            ["components/app_core/include"],
+        )
+
     def test_provider_capabilities_for_default_qwen(self):
         self.compile_and_run(
             textwrap.dedent(

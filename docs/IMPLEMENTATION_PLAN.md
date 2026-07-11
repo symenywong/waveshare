@@ -137,8 +137,10 @@ Implemented:
 - ESP-IDF `esp_http_client` transport with certificate bundle attachment.
 - HTTP/auth/rate-limit/timeout/provider failures mapped back into runtime
   events.
-- Automatic first fixed prompt after `NETWORK_READY`.
+- Chat prompt queue accepts text derived from the latest ASR transcript.
 - State machine accepts chat start from `IDLE` and `IDLE_WITH_RESULT`.
+- State machine also accepts chat start while already `THINKING`, avoiding a
+  race warning when the chat worker begins immediately after ASR completion.
 - Host contract tests for request formatting, response parsing, and state
   transitions.
 
@@ -196,14 +198,34 @@ Implemented:
 - HTTP/auth/rate-limit/timeout/provider failures mapped back into runtime
   events.
 - Runtime `asr_task` starts after PTT release and posts `ASR_DONE` or failure.
+- Latest transcript is retained in runtime memory long enough to hand it to the
+  chat worker.
 - Host contract tests for ASR request formatting, response parsing, provider
   config separation, and provisioning CSV output.
 
 Not yet implemented:
 
 - Feeding real recorded PCM into ASR.
-- Storing transcript text for downstream chat.
 - MiniMax or alternate ASR providers.
+
+## Current End-To-End PTT Scope
+
+Implemented:
+
+- BOOT long press -> `RECORDING`.
+- BOOT release -> `TRANSCRIBING`.
+- Static Qwen ASR sample -> transcript length logged, text content kept out of
+  logs.
+- ASR success -> `THINKING`.
+- Latest ASR transcript -> Qwen chat request.
+- Chat success -> `IDLE_WITH_RESULT`.
+- Contract test covers `ASR_STARTED -> ASR_DONE -> CHAT_STARTED -> CHAT_DONE`.
+
+Not yet implemented:
+
+- Streaming token-by-token answer display.
+- Rendering answer text on the circular screen.
+- Real microphone PCM in the ASR request.
 
 Not yet implemented:
 
