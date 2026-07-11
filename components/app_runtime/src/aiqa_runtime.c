@@ -5,6 +5,7 @@
 #include "aiqa_audio_capture.h"
 #include "aiqa_chat_client.h"
 #include "aiqa_net_connect.h"
+#include "aiqa_ptt_button.h"
 #include "aiqa_provider.h"
 #include "aiqa_state_machine.h"
 #include "board_wave_175c.h"
@@ -25,11 +26,13 @@ static const char *TAG = "aiqa_runtime";
 #define AIQA_UI_QUEUE_DEPTH 8
 #define AIQA_NET_QUEUE_DEPTH 2
 #define AIQA_CHAT_QUEUE_DEPTH 2
+#define AIQA_AUDIO_QUEUE_DEPTH 2
 #define AIQA_TASK_STACK_APP 4096
 #define AIQA_TASK_STACK_UI 6144
 #define AIQA_TASK_STACK_WORKER 4096
 #define AIQA_TASK_STACK_NET 6144
 #define AIQA_TASK_STACK_CHAT 8192
+#define AIQA_TASK_STACK_BUTTON 3072
 
 static const char *AIQA_FIXED_TEXT_PROMPT =
     "Introduce yourself as a tiny AI electronic pet and explain why rain happens in one short answer.";
@@ -56,10 +59,21 @@ typedef struct {
     const char *prompt;
 } aiqa_chat_command_t;
 
+typedef enum {
+    AIQA_AUDIO_COMMAND_START_RECORDING = 0,
+    AIQA_AUDIO_COMMAND_STOP_RECORDING,
+} aiqa_audio_command_type_t;
+
+typedef struct {
+    aiqa_audio_command_type_t type;
+    uint32_t max_record_ms;
+} aiqa_audio_command_t;
+
 static QueueHandle_t s_app_queue;
 static QueueHandle_t s_ui_queue;
 static QueueHandle_t s_net_queue;
 static QueueHandle_t s_chat_queue;
+static QueueHandle_t s_audio_queue;
 static aiqa_config_snapshot_t s_config_snapshot;
 static bool s_config_snapshot_ready;
 static bool s_fixed_prompt_sent;
@@ -150,6 +164,17 @@ static esp_err_t post_chat_command(aiqa_chat_command_t command)
         return ESP_ERR_INVALID_STATE;
     }
     if (xQueueSend(s_chat_queue, &command, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t post_audio_command(aiqa_audio_command_t command)
+{
+    if (s_audio_queue == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xQueueSend(s_audio_queue, &command, pdMS_TO_TICKS(100)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
     return ESP_OK;
@@ -354,7 +379,32 @@ static board_wave_175c_pet_expression_t ui_expression_for_message(aiqa_ui_messag
     case AIQA_STATE_IDLE_WITH_RESULT:
         return BOARD_WAVE_175C_PET_EXPRESSION_HAPPY;
     default:
-        return BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS;
+    return BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS;
+    }
+}
+
+static void handle_recording_transition(aiqa_transition_t transition)
+{
+    if (!transition.accepted || !transition.changed) {
+        return;
+    }
+
+    esp_err_t ret = ESP_OK;
+    if (transition.next_state == AIQA_STATE_RECORDING) {
+        aiqa_ptt_policy_t policy = aiqa_ptt_default_policy();
+        ret = post_audio_command((aiqa_audio_command_t){
+            .type = AIQA_AUDIO_COMMAND_START_RECORDING,
+            .max_record_ms = policy.max_record_ms,
+        });
+    } else if (transition.previous_state == AIQA_STATE_RECORDING) {
+        ret = post_audio_command((aiqa_audio_command_t){
+            .type = AIQA_AUDIO_COMMAND_STOP_RECORDING,
+            .max_record_ms = 0,
+        });
+    }
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to post audio command: %s", esp_err_to_name(ret));
     }
 }
 
@@ -423,6 +473,7 @@ static void app_state_task(void *arg)
                      aiqa_event_name(event.type),
                      aiqa_state_name(transition.next_state));
             post_ui_state(transition.next_state, transition.error);
+            handle_recording_transition(transition);
         }
 
         if (event.type == AIQA_EVENT_FACTORY_RESET) {
@@ -554,9 +605,118 @@ static void ui_task(void *arg)
 static void audio_task(void *arg)
 {
     (void)arg;
-    ESP_LOGI("aiqa_audio", "Audio task staged: future ES7210 DMA -> PSRAM ring buffer");
+    ESP_LOGI("aiqa_audio", "Audio task ready: PTT session owner, ES7210 DMA still staged");
+    bool recording = false;
     while (true) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        aiqa_audio_command_t command;
+        if (xQueueReceive(s_audio_queue, &command, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        switch (command.type) {
+        case AIQA_AUDIO_COMMAND_START_RECORDING:
+            if (!recording) {
+                recording = true;
+                ESP_LOGI("aiqa_audio", "PTT recording session started: max=%u ms, PCM driver staged",
+                         (unsigned)command.max_record_ms);
+            }
+            break;
+        case AIQA_AUDIO_COMMAND_STOP_RECORDING:
+            if (recording) {
+                recording = false;
+                ESP_LOGI("aiqa_audio", "PTT recording session stopped; ASR input capture not yet enabled");
+            }
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+static const char *ptt_output_name(aiqa_ptt_output_t output)
+{
+    switch (output) {
+    case AIQA_PTT_OUTPUT_PRESS_START:
+        return "PRESS_START";
+    case AIQA_PTT_OUTPUT_PRESS_END:
+        return "PRESS_END";
+    case AIQA_PTT_OUTPUT_AUDIO_TOO_LONG:
+        return "AUDIO_TOO_LONG";
+    case AIQA_PTT_OUTPUT_NONE:
+    default:
+        return "NONE";
+    }
+}
+
+static bool ptt_output_to_event(aiqa_ptt_output_t output, aiqa_event_t *event)
+{
+    if (event == NULL) {
+        return false;
+    }
+
+    switch (output) {
+    case AIQA_PTT_OUTPUT_PRESS_START:
+        *event = (aiqa_event_t){
+            .type = AIQA_EVENT_PRESS_START,
+            .error = AIQA_ERROR_NONE,
+            .value = 0,
+        };
+        return true;
+    case AIQA_PTT_OUTPUT_PRESS_END:
+        *event = (aiqa_event_t){
+            .type = AIQA_EVENT_PRESS_END,
+            .error = AIQA_ERROR_NONE,
+            .value = 0,
+        };
+        return true;
+    case AIQA_PTT_OUTPUT_AUDIO_TOO_LONG:
+        *event = (aiqa_event_t){
+            .type = AIQA_EVENT_AUDIO_TOO_LONG,
+            .error = AIQA_ERROR_AUDIO_TOO_LONG,
+            .value = 0,
+        };
+        return true;
+    case AIQA_PTT_OUTPUT_NONE:
+    default:
+        return false;
+    }
+}
+
+static void button_task(void *arg)
+{
+    (void)arg;
+
+    aiqa_ptt_policy_t policy = aiqa_ptt_default_policy();
+    if (!aiqa_ptt_policy_is_safe(&policy)) {
+        ESP_LOGE("aiqa_button", "Unsafe PTT policy; button task stopped");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    aiqa_ptt_button_t button;
+    aiqa_ptt_button_init(&button);
+    ESP_LOGI("aiqa_button", "BOOT long-press PTT ready: threshold=%u ms max=%u ms",
+             (unsigned)policy.long_press_ms,
+             (unsigned)policy.max_record_ms);
+
+    while (true) {
+        bool pressed = false;
+        esp_err_t ret = board_wave_175c_boot_button_is_pressed(&pressed);
+        if (ret == ESP_OK) {
+            uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            aiqa_ptt_output_t output = aiqa_ptt_button_update(&button, &policy, pressed, now_ms);
+            aiqa_event_t event = {0};
+            if (ptt_output_to_event(output, &event)) {
+                ESP_LOGI("aiqa_button", "PTT output: %s", ptt_output_name(output));
+                esp_err_t post_ret = aiqa_runtime_post_event(event);
+                if (post_ret != ESP_OK) {
+                    ESP_LOGW("aiqa_button", "Failed to post PTT event: %s", esp_err_to_name(post_ret));
+                }
+            }
+        } else {
+            ESP_LOGW("aiqa_button", "BOOT read failed: %s", esp_err_to_name(ret));
+        }
+        vTaskDelay(pdMS_TO_TICKS(policy.poll_interval_ms));
     }
 }
 
@@ -707,13 +867,16 @@ esp_err_t aiqa_runtime_start(void)
     s_ui_queue = xQueueCreate(AIQA_UI_QUEUE_DEPTH, sizeof(aiqa_ui_message_t));
     s_net_queue = xQueueCreate(AIQA_NET_QUEUE_DEPTH, sizeof(aiqa_net_command_t));
     s_chat_queue = xQueueCreate(AIQA_CHAT_QUEUE_DEPTH, sizeof(aiqa_chat_command_t));
-    if (s_app_queue == NULL || s_ui_queue == NULL || s_net_queue == NULL || s_chat_queue == NULL) {
+    s_audio_queue = xQueueCreate(AIQA_AUDIO_QUEUE_DEPTH, sizeof(aiqa_audio_command_t));
+    if (s_app_queue == NULL || s_ui_queue == NULL || s_net_queue == NULL ||
+        s_chat_queue == NULL || s_audio_queue == NULL) {
         return ESP_ERR_NO_MEM;
     }
 
     if (xTaskCreate(app_state_task, "aiqa_state", AIQA_TASK_STACK_APP, NULL, 8, NULL) != pdPASS ||
         xTaskCreate(ui_task, "aiqa_ui", AIQA_TASK_STACK_UI, NULL, 6, NULL) != pdPASS ||
         xTaskCreate(audio_task, "aiqa_audio", AIQA_TASK_STACK_WORKER, NULL, 5, NULL) != pdPASS ||
+        xTaskCreate(button_task, "aiqa_button", AIQA_TASK_STACK_BUTTON, NULL, 5, NULL) != pdPASS ||
         xTaskCreate(net_task, "aiqa_net", AIQA_TASK_STACK_NET, NULL, 5, NULL) != pdPASS ||
         xTaskCreate(chat_task, "aiqa_chat", AIQA_TASK_STACK_CHAT, NULL, 5, NULL) != pdPASS) {
         return ESP_ERR_NO_MEM;

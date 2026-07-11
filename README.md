@@ -11,8 +11,8 @@ The first implementation stage establishes the safe runtime skeleton:
 - board constants for the 1.75C hardware
 - I2C scan and required-device detection for PMU/audio codecs
 - CO5300 AMOLED QSPI bring-up with a circular-safe pet expression page
-- BOOT input readout and PA safe-off default
-- bounded 16 kHz/16-bit/mono audio capture budget
+- BOOT long-press push-to-talk event source and PA safe-off default
+- bounded 16 kHz/16-bit/mono audio capture budget and recording session lifecycle
 - provider capability contracts for Qwen/DashScope and MiniMax
 - secure configuration validation and redaction tooling
 - local tests for provider/config safety rules
@@ -35,6 +35,7 @@ On boot the current firmware prints:
 - I2C scan addresses and missing required devices
 - BOOT button pressed/released state
 - audio capture budget
+- BOOT long-press PTT event transitions
 - AMOLED init status and pet expression-page updates
 - NVS provisioning status
 - Wi-Fi/SNTP network task status after provisioning
@@ -53,6 +54,11 @@ screen shows a readable pet page; without provisioning it should display
 After provisioning and network readiness, the runtime sends one fixed pet
 prompt to the configured OpenAI-compatible Qwen endpoint, then maps the result
 back into the pet state machine.
+
+Long-pressing BOOT now drives the runtime into the `LISTENING` pet state and
+release moves it toward transcription. The actual ES7210/I2S PCM capture driver
+is still staged, so Phase 5 verifies interaction timing and bounded recording
+ownership before wiring real microphone samples into ASR.
 
 ## Configuration
 

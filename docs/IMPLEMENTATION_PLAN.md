@@ -154,6 +154,28 @@ Implemented:
 - AMOLED page rendering now uses the sprite pet instead of geometric circle
   shapes, keeping text and pet content away from the circular screen edge.
 
+## Current PTT Recording Scope
+
+Implemented:
+
+- Pure C BOOT long-press policy:
+  - 40 ms debounce
+  - 500 ms long-press threshold
+  - 20 ms polling cadence
+  - 20 second maximum recording session
+- Runtime `button_task` polling BOOT as the temporary development PTT input.
+- `PRESS_START`, `PRESS_END`, and `AUDIO_TOO_LONG` event emission.
+- `audio_task` owns recording start/stop commands and logs the capture session
+  lifecycle.
+- Host contract tests cover short-press rejection, long-press start, release
+  stop, and one-shot timeout behavior.
+
+Not yet implemented:
+
+- Real ES7210 codec initialization.
+- I2S DMA PCM capture into PSRAM.
+- Passing recorded PCM bytes into ASR.
+
 Not yet implemented:
 
 - AXP2101 register reads / PWR event decoding.

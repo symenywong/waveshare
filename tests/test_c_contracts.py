@@ -389,6 +389,57 @@ class CContractTests(unittest.TestCase):
             ["components/audio_capture/include"],
         )
 
+    def test_ptt_button_long_press_and_timeout_contract(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_ptt_button.h"
+                #include <assert.h>
+
+                int main(void) {
+                    aiqa_ptt_policy_t policy = aiqa_ptt_default_policy();
+                    assert(aiqa_ptt_policy_is_safe(&policy));
+                    assert(policy.long_press_ms > policy.debounce_ms);
+
+                    aiqa_ptt_button_t button;
+                    aiqa_ptt_button_init(&button);
+
+                    assert(aiqa_ptt_button_update(&button, &policy, false, 0) == AIQA_PTT_OUTPUT_NONE);
+                    assert(aiqa_ptt_button_update(&button, &policy, true, 10) == AIQA_PTT_OUTPUT_NONE);
+                    assert(aiqa_ptt_button_update(&button, &policy, false, 40) == AIQA_PTT_OUTPUT_NONE);
+
+                    assert(aiqa_ptt_button_update(&button, &policy, true, 100) == AIQA_PTT_OUTPUT_NONE);
+                    assert(aiqa_ptt_button_update(&button, &policy, true, 100 + policy.debounce_ms) ==
+                           AIQA_PTT_OUTPUT_NONE);
+                    assert(aiqa_ptt_button_update(&button, &policy, true, 100 + policy.long_press_ms - 1) ==
+                           AIQA_PTT_OUTPUT_NONE);
+                    assert(aiqa_ptt_button_update(&button, &policy, true, 100 + policy.long_press_ms) ==
+                           AIQA_PTT_OUTPUT_PRESS_START);
+                    assert(aiqa_ptt_button_update(&button, &policy, true, 100 + policy.long_press_ms + 20) ==
+                           AIQA_PTT_OUTPUT_NONE);
+                    assert(aiqa_ptt_button_update(&button, &policy, false, 100 + policy.long_press_ms + 40) ==
+                           AIQA_PTT_OUTPUT_NONE);
+                    assert(aiqa_ptt_button_update(&button, &policy, false, 100 + policy.long_press_ms + 40 + policy.debounce_ms) ==
+                           AIQA_PTT_OUTPUT_PRESS_END);
+
+                    aiqa_ptt_button_init(&button);
+                    assert(aiqa_ptt_button_update(&button, &policy, true, 1000) == AIQA_PTT_OUTPUT_NONE);
+                    assert(aiqa_ptt_button_update(&button, &policy, true, 1000 + policy.long_press_ms) ==
+                           AIQA_PTT_OUTPUT_PRESS_START);
+                    assert(aiqa_ptt_button_update(&button, &policy, true, 1000 + policy.long_press_ms + policy.max_record_ms) ==
+                           AIQA_PTT_OUTPUT_AUDIO_TOO_LONG);
+                    assert(aiqa_ptt_button_update(&button, &policy, true, 1000 + policy.long_press_ms + policy.max_record_ms + 20) ==
+                           AIQA_PTT_OUTPUT_NONE);
+                    assert(aiqa_ptt_button_update(&button, &policy, false, 1000 + policy.long_press_ms + policy.max_record_ms + 40) ==
+                           AIQA_PTT_OUTPUT_NONE);
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_ptt_button.c"],
+            ["components/app_core/include"],
+        )
+
     def test_runtime_config_rejects_unapproved_hosts_and_missing_secrets(self):
         self.compile_and_run(
             textwrap.dedent(
