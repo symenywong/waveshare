@@ -1,0 +1,18 @@
+#pragma once
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum {
+    BOARD_WAVE_175C_PET_EXPRESSION_SLEEPY = 0,
+    BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS,
+    BOARD_WAVE_175C_PET_EXPRESSION_HAPPY,
+    BOARD_WAVE_175C_PET_EXPRESSION_LISTENING,
+    BOARD_WAVE_175C_PET_EXPRESSION_THINKING,
+    BOARD_WAVE_175C_PET_EXPRESSION_WORRIED,
+} board_wave_175c_pet_expression_t;
+
+#ifdef __cplusplus
+}
+#endif

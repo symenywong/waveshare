@@ -38,6 +38,7 @@ On boot the current firmware prints:
 - AMOLED init status and pet expression-page updates
 - NVS provisioning status
 - Wi-Fi/SNTP network task status after provisioning
+- fixed-text Qwen chat bring-up status after network readiness
 
 Local host-side checks:
 
@@ -49,6 +50,9 @@ The firmware currently stops at `ERROR/CONFIG_MISSING` until the `aiqa` NVS
 namespace is provisioned with Wi-Fi credentials and a chat API key. The AMOLED
 screen shows a readable pet page; without provisioning it should display
 `AI PET`, `SETUP NEEDED`, `NVS CONFIG MISSING`, and `RUN PROVISION TOOL`.
+After provisioning and network readiness, the runtime sends one fixed pet
+prompt to the configured OpenAI-compatible Qwen endpoint, then maps the result
+back into the pet state machine.
 
 ## Configuration
 

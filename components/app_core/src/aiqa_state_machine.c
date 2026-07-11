@@ -122,6 +122,9 @@ aiqa_transition_t aiqa_state_machine_dispatch(aiqa_state_machine_t *machine, aiq
         break;
     case AIQA_STATE_IDLE:
     case AIQA_STATE_IDLE_WITH_RESULT:
+        if (event.type == AIQA_EVENT_CHAT_STARTED) {
+            return make_transition(machine, AIQA_STATE_THINKING, AIQA_ERROR_NONE, true);
+        }
         if (event.type == AIQA_EVENT_PRESS_START) {
             return make_transition(machine, AIQA_STATE_RECORDING, AIQA_ERROR_NONE, true);
         }

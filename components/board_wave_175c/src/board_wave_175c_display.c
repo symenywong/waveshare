@@ -1,6 +1,7 @@
 #include "board_wave_175c.h"
 
 #include "board_wave_175c_display_contract.h"
+#include "board_wave_175c_pet_sprite.h"
 #include "board_wave_175c_pins.h"
 
 #include "driver/spi_common.h"
@@ -29,9 +30,6 @@ static const char *TAG = "board_175c_display";
 #define RGB565_BLACK 0x0000
 #define RGB565_WHITE 0xFFFF
 #define RGB565_PET_BG 0x0841
-#define RGB565_PET_FACE 0xFEA0
-#define RGB565_PET_FACE_SHADOW 0xCC48
-#define RGB565_PET_CHEEK 0xFC9F
 #define RGB565_PET_MUTED 0x8410
 #define RGB565_PET_WARNING 0xFD20
 
@@ -412,35 +410,6 @@ static esp_err_t display_draw_text_line(
     return ret;
 }
 
-static int circle_half_width_for_row(int radius, int dy)
-{
-    const int r2 = radius * radius;
-    const int dy2 = dy * dy;
-    int half_width = 0;
-    while ((half_width + 1) * (half_width + 1) + dy2 <= r2) {
-        ++half_width;
-    }
-    return half_width;
-}
-
-static esp_err_t display_draw_filled_circle(int center_x, int center_y, int radius, uint16_t color)
-{
-    if (radius <= 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    for (int dy = -radius; dy <= radius; ++dy) {
-        const int half_width = circle_half_width_for_row(radius, dy);
-        ESP_RETURN_ON_ERROR(display_draw_solid_rect(center_x - half_width,
-                                                    center_y + dy,
-                                                    center_x + half_width + 1,
-                                                    center_y + dy + 1,
-                                                    color),
-                            TAG, "LCD circle row draw failed");
-    }
-    return ESP_OK;
-}
-
 static esp_err_t display_draw_centered_text_line(
     const char *text,
     int scale,
@@ -455,93 +424,34 @@ static esp_err_t display_draw_centered_text_line(
     return display_draw_text_line(rect.x, rect.y, text, scale, foreground, background);
 }
 
-static esp_err_t display_draw_mouth_dot(int x, int y)
-{
-    return display_draw_filled_circle(x, y, 4, RGB565_BLACK);
-}
-
-static esp_err_t display_draw_pet_smile(int center_x, int center_y)
-{
-    ESP_RETURN_ON_ERROR(display_draw_mouth_dot(center_x - 28, center_y + 24), TAG, "pet smile failed");
-    ESP_RETURN_ON_ERROR(display_draw_mouth_dot(center_x - 14, center_y + 34), TAG, "pet smile failed");
-    ESP_RETURN_ON_ERROR(display_draw_mouth_dot(center_x, center_y + 38), TAG, "pet smile failed");
-    ESP_RETURN_ON_ERROR(display_draw_mouth_dot(center_x + 14, center_y + 34), TAG, "pet smile failed");
-    return display_draw_mouth_dot(center_x + 28, center_y + 24);
-}
-
-static esp_err_t display_draw_pet_worried_mouth(int center_x, int center_y)
-{
-    ESP_RETURN_ON_ERROR(display_draw_mouth_dot(center_x - 28, center_y + 38), TAG, "pet worried mouth failed");
-    ESP_RETURN_ON_ERROR(display_draw_mouth_dot(center_x - 14, center_y + 28), TAG, "pet worried mouth failed");
-    ESP_RETURN_ON_ERROR(display_draw_mouth_dot(center_x, center_y + 24), TAG, "pet worried mouth failed");
-    ESP_RETURN_ON_ERROR(display_draw_mouth_dot(center_x + 14, center_y + 28), TAG, "pet worried mouth failed");
-    return display_draw_mouth_dot(center_x + 28, center_y + 38);
-}
-
-static esp_err_t display_draw_pet_neutral_mouth(int center_x, int center_y)
-{
-    ESP_RETURN_ON_ERROR(display_draw_mouth_dot(center_x - 18, center_y + 30), TAG, "pet neutral mouth failed");
-    ESP_RETURN_ON_ERROR(display_draw_mouth_dot(center_x - 6, center_y + 30), TAG, "pet neutral mouth failed");
-    ESP_RETURN_ON_ERROR(display_draw_mouth_dot(center_x + 6, center_y + 30), TAG, "pet neutral mouth failed");
-    return display_draw_mouth_dot(center_x + 18, center_y + 30);
-}
-
-static esp_err_t display_draw_pet_sleepy_eye(int x, int y)
-{
-    ESP_RETURN_ON_ERROR(display_draw_filled_circle(x - 10, y, 4, RGB565_BLACK), TAG, "pet sleepy eye failed");
-    ESP_RETURN_ON_ERROR(display_draw_filled_circle(x, y + 2, 4, RGB565_BLACK), TAG, "pet sleepy eye failed");
-    return display_draw_filled_circle(x + 10, y, 4, RGB565_BLACK);
-}
-
 static esp_err_t display_draw_pet_expression(board_wave_175c_pet_expression_t expression, uint16_t accent)
 {
-    const int cx = BOARD_WAVE_175C_PET_FACE_CENTER_X;
-    const int cy = BOARD_WAVE_175C_PET_FACE_CENTER_Y;
-    const int radius = BOARD_WAVE_175C_PET_FACE_RADIUS;
+    (void)accent;
 
-    ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx - 52, cy - 54, 24, RGB565_PET_FACE_SHADOW),
-                        TAG, "pet ear draw failed");
-    ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx + 52, cy - 54, 24, RGB565_PET_FACE_SHADOW),
-                        TAG, "pet ear draw failed");
-    ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx, cy, radius, RGB565_PET_FACE),
-                        TAG, "pet face draw failed");
-    ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx - 38, cy + 12, 10, RGB565_PET_CHEEK),
-                        TAG, "pet cheek draw failed");
-    ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx + 38, cy + 12, 10, RGB565_PET_CHEEK),
-                        TAG, "pet cheek draw failed");
-
-    switch (expression) {
-    case BOARD_WAVE_175C_PET_EXPRESSION_SLEEPY:
-        ESP_RETURN_ON_ERROR(display_draw_pet_sleepy_eye(cx - 28, cy - 10), TAG, "pet sleepy eye failed");
-        ESP_RETURN_ON_ERROR(display_draw_pet_sleepy_eye(cx + 28, cy - 10), TAG, "pet sleepy eye failed");
-        return display_draw_pet_neutral_mouth(cx, cy);
-    case BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS:
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx - 26, cy - 14, 10, RGB565_BLACK), TAG, "pet eye failed");
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx + 30, cy - 18, 7, RGB565_BLACK), TAG, "pet eye failed");
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx + 48, cy - 42, 5, accent), TAG, "pet curious mark failed");
-        return display_draw_pet_neutral_mouth(cx, cy);
-    case BOARD_WAVE_175C_PET_EXPRESSION_LISTENING:
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx - 28, cy - 12, 11, RGB565_BLACK), TAG, "pet eye failed");
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx + 28, cy - 12, 11, RGB565_BLACK), TAG, "pet eye failed");
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx, cy + 30, 12, RGB565_BLACK), TAG, "pet listen mouth failed");
-        return display_draw_filled_circle(cx, cy + 30, 6, RGB565_PET_FACE);
-    case BOARD_WAVE_175C_PET_EXPRESSION_THINKING:
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx - 28, cy - 12, 9, RGB565_BLACK), TAG, "pet eye failed");
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx + 28, cy - 12, 9, RGB565_BLACK), TAG, "pet eye failed");
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx + 61, cy - 48, 6, accent), TAG, "pet bubble failed");
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx + 79, cy - 60, 9, accent), TAG, "pet bubble failed");
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx + 97, cy - 70, 12, accent), TAG, "pet bubble failed");
-        return display_draw_pet_neutral_mouth(cx, cy);
-    case BOARD_WAVE_175C_PET_EXPRESSION_WORRIED:
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx - 28, cy - 8, 9, RGB565_BLACK), TAG, "pet eye failed");
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx + 28, cy - 8, 9, RGB565_BLACK), TAG, "pet eye failed");
-        return display_draw_pet_worried_mouth(cx, cy);
-    case BOARD_WAVE_175C_PET_EXPRESSION_HAPPY:
-    default:
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx - 28, cy - 12, 10, RGB565_BLACK), TAG, "pet eye failed");
-        ESP_RETURN_ON_ERROR(display_draw_filled_circle(cx + 28, cy - 12, 10, RGB565_BLACK), TAG, "pet eye failed");
-        return display_draw_pet_smile(cx, cy);
+    const board_wave_175c_pet_sprite_t *sprite = board_wave_175c_pet_sprite_for_expression(expression);
+    board_wave_175c_display_rect_t rect = {0};
+    if (!board_wave_175c_pet_sprite_rect(sprite, &rect)) {
+        return ESP_ERR_INVALID_ARG;
     }
+
+    for (int row = 0; row < sprite->height; ++row) {
+        for (int col = 0; col < sprite->width; ++col) {
+            const uint16_t color = sprite->pixels[(size_t)row * sprite->width + col];
+            if (color == 0) {
+                continue;
+            }
+
+            const int x = rect.x + col * sprite->scale;
+            const int y = rect.y + row * sprite->scale;
+            ESP_RETURN_ON_ERROR(display_draw_solid_rect(x,
+                                                        y,
+                                                        x + sprite->scale,
+                                                        y + sprite->scale,
+                                                        color),
+                                TAG, "pet sprite pixel draw failed");
+        }
+    }
+    return ESP_OK;
 }
 
 esp_err_t board_wave_175c_display_init(void)

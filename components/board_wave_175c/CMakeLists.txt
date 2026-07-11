@@ -4,6 +4,7 @@ idf_component_register(
         "src/board_wave_175c_contract.c"
         "src/board_wave_175c_display.c"
         "src/board_wave_175c_display_contract.c"
+        "src/board_wave_175c_pet_sprite.c"
     INCLUDE_DIRS "include"
     REQUIRES
         esp_driver_gpio

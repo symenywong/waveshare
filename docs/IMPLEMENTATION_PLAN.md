@@ -117,12 +117,49 @@ Implemented:
   - Wi-Fi/SNTP failure -> `NETWORK_FAILED`
 - Network policy contract tests cover retry delay and minimum valid TLS time.
 
+## Current Chat Scope
+
+Implemented:
+
+- `chat_client` component for one-shot OpenAI-compatible chat requests.
+- DashScope/Qwen endpoint construction:
+  - configured base URL plus `/chat/completions`
+  - default model `qwen3.7-max`
+  - non-streaming fixed-text bring-up request
+- Request JSON builder that keeps Authorization secrets out of request-body
+  tests and logs.
+- ESP-IDF `esp_http_client` transport with certificate bundle attachment.
+- HTTP/auth/rate-limit/timeout/provider failures mapped back into runtime
+  events.
+- Automatic first fixed prompt after `NETWORK_READY`.
+- State machine accepts chat start from `IDLE` and `IDLE_WITH_RESULT`.
+- Host contract tests for request formatting, response parsing, and state
+  transitions.
+
+Not yet implemented:
+
+- Streaming chat token display.
+- Real ASR-derived prompts.
+- Separate MiniMax chat adapter.
+- Device-side verified live Qwen call with provisioned Wi-Fi/API credentials.
+
+## Current Pet UI Scope
+
+Implemented:
+
+- Centered 16x16 pixel pet sprite abstraction.
+- Circular-safe sprite layout contract.
+- Temporary local pixel sprites for happy, listening, thinking, and worried
+  states.
+- AMOLED page rendering now uses the sprite pet instead of geometric circle
+  shapes, keeping text and pet content away from the circular screen edge.
+
 Not yet implemented:
 
 - AXP2101 register reads / PWR event decoding.
 - ES7210 codec initialization and I2S DMA capture.
 - ES8311 playback and PA pop suppression sequence.
-- TLS HTTPS, ASR, and chat calls.
+- ASR calls.
 - Animated pet mood transitions and richer response presentation.
 - Production secret hardening with ESP-IDF NVS encryption:
   - flash encryption plus `nvs_keys`, or

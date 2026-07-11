@@ -96,6 +96,38 @@ class CContractTests(unittest.TestCase):
             ["components/app_core/include"],
         )
 
+    def test_chat_started_can_begin_text_interaction_after_network_ready(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_state_machine.h"
+                #include <assert.h>
+
+                static void dispatch(aiqa_state_machine_t *m, aiqa_event_type_t type, aiqa_state_t expected) {
+                    aiqa_event_t event = {.type = type, .error = AIQA_ERROR_NONE, .value = 0};
+                    aiqa_transition_t t = aiqa_state_machine_dispatch(m, event);
+                    assert(t.accepted);
+                    assert(m->state == expected);
+                }
+
+                int main(void) {
+                    aiqa_state_machine_t machine;
+                    aiqa_state_machine_init(&machine);
+                    dispatch(&machine, AIQA_EVENT_BOOTED, AIQA_STATE_CONFIG_CHECK);
+                    dispatch(&machine, AIQA_EVENT_CONFIG_READY, AIQA_STATE_NETWORK_CONNECTING);
+                    dispatch(&machine, AIQA_EVENT_NETWORK_READY, AIQA_STATE_IDLE);
+                    dispatch(&machine, AIQA_EVENT_CHAT_STARTED, AIQA_STATE_THINKING);
+                    dispatch(&machine, AIQA_EVENT_CHAT_TOKEN, AIQA_STATE_THINKING);
+                    dispatch(&machine, AIQA_EVENT_CHAT_DONE, AIQA_STATE_IDLE_WITH_RESULT);
+                    dispatch(&machine, AIQA_EVENT_CHAT_STARTED, AIQA_STATE_THINKING);
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_state_machine.c"],
+            ["components/app_core/include"],
+        )
+
     def test_provider_capabilities_for_default_qwen(self):
         self.compile_and_run(
             textwrap.dedent(
@@ -116,6 +148,79 @@ class CContractTests(unittest.TestCase):
             ),
             ["components/provider_common/src/aiqa_provider.c"],
             ["components/provider_common/include"],
+        )
+
+    def test_chat_protocol_builds_qwen_request_without_leaking_secret(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_chat_protocol.h"
+                #include "aiqa_config.h"
+                #include <assert.h>
+                #include <string.h>
+
+                int main(void) {
+                    aiqa_config_t config = aiqa_config_default();
+                    aiqa_chat_options_t options = {
+                        .stream = false,
+                        .hide_reasoning = true,
+                        .max_completion_tokens = 96,
+                    };
+
+                    char url[AIQA_CHAT_ENDPOINT_MAX_LEN] = {0};
+                    aiqa_chat_status_t status = aiqa_chat_build_endpoint_url(
+                        config.base_url,
+                        url,
+                        sizeof(url));
+                    assert(status == AIQA_CHAT_OK);
+                    assert(strcmp(url, "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions") == 0);
+
+                    char body[AIQA_CHAT_REQUEST_MAX_LEN] = {0};
+                    status = aiqa_chat_build_request_json(
+                        &config,
+                        &options,
+                        "Hello \\"pet\\"!\\nCan you explain rain?",
+                        body,
+                        sizeof(body));
+                    assert(status == AIQA_CHAT_OK);
+                    assert(strstr(body, "\\"model\\":\\"qwen3.7-max\\"") != 0);
+                    assert(strstr(body, "\\"role\\":\\"system\\"") != 0);
+                    assert(strstr(body, "AI electronic pet") != 0);
+                    assert(strstr(body, "\\"stream\\":false") != 0);
+                    assert(strstr(body, "\\"enable_thinking\\":false") != 0);
+                    assert(strstr(body, "\\"max_tokens\\":96") != 0);
+                    assert(strstr(body, "Hello") != 0);
+                    assert(strstr(body, "Can you explain rain?") != 0);
+                    assert(strstr(body, "\\\\n") != 0);
+                    assert(strstr(body, "sk-") == 0);
+
+                    char reply[128] = {0};
+                    status = aiqa_chat_parse_response_text(
+                        "{\\"choices\\":[{\\"message\\":{\\"role\\":\\"assistant\\",\\"content\\":\\"Rain comes from clouds.\\nWant a tiny experiment?\\"}}]}",
+                        reply,
+                        sizeof(reply));
+                    assert(status == AIQA_CHAT_OK);
+                    assert(strcmp(reply, "Rain comes from clouds.\\nWant a tiny experiment?") == 0);
+
+                    assert(aiqa_chat_status_from_http_status(200) == AIQA_CHAT_OK);
+                    assert(aiqa_chat_status_from_http_status(401) == AIQA_CHAT_ERR_AUTH);
+                    assert(aiqa_chat_status_from_http_status(429) == AIQA_CHAT_ERR_RATE_LIMITED);
+                    assert(aiqa_chat_status_from_http_status(504) == AIQA_CHAT_ERR_TIMEOUT);
+                    assert(aiqa_chat_status_from_http_status(500) == AIQA_CHAT_ERR_PROVIDER);
+                    return 0;
+                }
+                """
+            ),
+            [
+                "components/chat_client/src/aiqa_chat_protocol.c",
+                "components/config_store/src/aiqa_config.c",
+                "components/provider_common/src/aiqa_provider.c",
+            ],
+            [
+                "components/chat_client/include",
+                "components/config_store/include",
+                "components/provider_common/include",
+            ],
         )
 
     def test_board_i2c_required_device_contract(self):
@@ -206,6 +311,45 @@ class CContractTests(unittest.TestCase):
                 """
             ),
             ["components/board_wave_175c/src/board_wave_175c_display_contract.c"],
+            ["components/board_wave_175c/include"],
+        )
+
+    def test_center_pixel_pet_sprite_layout_contract(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "board_wave_175c_pet_sprite.h"
+                #include <assert.h>
+
+                int main(void) {
+                    for (int expression = BOARD_WAVE_175C_PET_EXPRESSION_SLEEPY;
+                         expression <= BOARD_WAVE_175C_PET_EXPRESSION_WORRIED;
+                         ++expression) {
+                        const board_wave_175c_pet_sprite_t *sprite =
+                            board_wave_175c_pet_sprite_for_expression((board_wave_175c_pet_expression_t)expression);
+                        assert(sprite != 0);
+                        assert(sprite->pixels != 0);
+                        assert(sprite->pixel_count == 256);
+                        assert(sprite->width == 16);
+                        assert(sprite->height == 16);
+                        assert(sprite->scale == 9);
+
+                        board_wave_175c_display_rect_t rect = {0};
+                        assert(board_wave_175c_pet_sprite_rect(sprite, &rect));
+                        assert(rect.x >= 0);
+                        assert(rect.y >= 0);
+                        assert(board_wave_175c_display_rect_inside_safe_circle(
+                            rect.x, rect.y, rect.width, rect.height));
+                    }
+                    assert(board_wave_175c_pet_sprite_layout_is_circle_safe());
+                    return 0;
+                }
+                """
+            ),
+            [
+                "components/board_wave_175c/src/board_wave_175c_display_contract.c",
+                "components/board_wave_175c/src/board_wave_175c_pet_sprite.c",
+            ],
             ["components/board_wave_175c/include"],
         )
 

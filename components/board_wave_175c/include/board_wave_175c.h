@@ -1,6 +1,7 @@
 #pragma once
 
 #include "board_wave_175c_contract.h"
+#include "board_wave_175c_pet_types.h"
 
 #include "esp_err.h"
 
@@ -18,15 +19,6 @@ typedef struct {
     uint32_t detected_mask;
     uint32_t missing_required_mask;
 } board_wave_175c_i2c_scan_result_t;
-
-typedef enum {
-    BOARD_WAVE_175C_PET_EXPRESSION_SLEEPY = 0,
-    BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS,
-    BOARD_WAVE_175C_PET_EXPRESSION_HAPPY,
-    BOARD_WAVE_175C_PET_EXPRESSION_LISTENING,
-    BOARD_WAVE_175C_PET_EXPRESSION_THINKING,
-    BOARD_WAVE_175C_PET_EXPRESSION_WORRIED,
-} board_wave_175c_pet_expression_t;
 
 typedef struct {
     const char *title;
