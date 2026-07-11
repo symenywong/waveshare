@@ -174,6 +174,41 @@ class CContractTests(unittest.TestCase):
             ["components/board_wave_175c/include"],
         )
 
+    def test_round_display_pet_layout_contract(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "board_wave_175c_display_contract.h"
+                #include <assert.h>
+
+                int main(void) {
+                    assert(board_wave_175c_display_safe_center_x() == 233);
+                    assert(board_wave_175c_display_safe_center_y() == 233);
+                    assert(board_wave_175c_display_safe_radius() <= 205);
+                    assert(!board_wave_175c_display_rect_inside_safe_circle(0, 0, 466, 40));
+
+                    board_wave_175c_display_rect_t title = {0};
+                    assert(board_wave_175c_display_centered_text_rect(6, 2, 42, &title));
+                    assert(board_wave_175c_display_rect_inside_safe_circle(title.x, title.y, title.width, title.height));
+
+                    board_wave_175c_display_rect_t status = {0};
+                    assert(board_wave_175c_display_centered_text_rect(14, 4, 280, &status));
+                    assert(board_wave_175c_display_rect_inside_safe_circle(status.x, status.y, status.width, status.height));
+
+                    board_wave_175c_display_rect_t detail = {0};
+                    assert(board_wave_175c_display_centered_text_rect(23, 2, 334, &detail));
+                    assert(board_wave_175c_display_rect_inside_safe_circle(detail.x, detail.y, detail.width, detail.height));
+
+                    assert(board_wave_175c_pet_face_rect_inside_safe_circle());
+                    assert(board_wave_175c_pet_layout_is_circle_safe());
+                    return 0;
+                }
+                """
+            ),
+            ["components/board_wave_175c/src/board_wave_175c_display_contract.c"],
+            ["components/board_wave_175c/include"],
+        )
+
     def test_audio_capture_budget_contract(self):
         self.compile_and_run(
             textwrap.dedent(

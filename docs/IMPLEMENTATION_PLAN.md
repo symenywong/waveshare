@@ -1,4 +1,4 @@
-# Implementation Plan
+# AI Pet Implementation Plan
 
 ## Runtime Contract
 
@@ -6,7 +6,7 @@ The application is event-driven. Only `app_state_task` owns the state machine.
 Other tasks send events or receive commands through queues.
 
 - `app_state_task`: state transitions, cancellation, error handling.
-- `ui_task`: the only future LVGL owner; it must not perform network or I2S.
+- `ui_task`: display owner for the circular pet interface; it must not perform network or I2S.
 - `audio_task`: future I2S DMA capture, PSRAM ring buffer, max-duration guard.
 - `net_task`: future HTTPS owner with TLS validation, staged timeouts, streaming.
 - `provider` adapters: request/response protocol only; no UI or socket ownership.
@@ -19,7 +19,7 @@ Other tasks send events or receive commands through queues.
 4. Fixed-text Qwen call using `dashscope_openai_chat` and `qwen3.7-max`.
 5. Bounded push-to-talk recording with 16 kHz/16-bit mono extraction.
 6. ASR provider selection and static audio sample transcription.
-7. End-to-end PTT: recording -> ASR -> streamed chat answer -> screen.
+7. End-to-end PTT: recording -> ASR -> streamed chat answer -> pet response screen.
 8. MiniMax chat adapter and provider capability table.
 9. Soak tests, low-memory handling, rate limits, privacy UX, release hardening.
 
@@ -27,10 +27,10 @@ Other tasks send events or receive commands through queues.
 
 - AMOLED: 466x466
 - LCD SDIO0..3: GPIO 4/5/6/7
-- LCD SCLK/CS/RESET: GPIO 38/12/2
+- LCD SCLK/CS/RESET: GPIO 38/12/39
 - I2C SDA/SCL: GPIO 15/14
-- Touch INT/RST: GPIO 11/2
-- ES7210 BCLK/LRCK/DIN/MCLK: GPIO 9/45/10/16
+- Touch INT/RST: GPIO 11/40
+- ES7210 BCLK/LRCK/DIN/MCLK: GPIO 9/45/10/42
 - ES8311 DOUT: GPIO 8
 - PA: GPIO 46
 
@@ -58,6 +58,12 @@ Implemented:
   - mono
   - 20 second maximum
   - 640 KB maximum PCM buffer
+- Initialize the CO5300 AMOLED over QSPI and render the current runtime state.
+- Render the first AI pet status surface:
+  - circular-safe centered text
+  - non-card pet face composition
+  - sleepy, curious, happy, listening, thinking, and worried expressions
+  - warm warning color for setup/errors instead of a red failure screen
 - ESP-IDF build/flash validated on `/dev/cu.usbmodem1101`.
 - Boot log confirms all expected I2C devices are visible:
   - AXP2101 `0x34`
@@ -114,10 +120,10 @@ Implemented:
 Not yet implemented:
 
 - AXP2101 register reads / PWR event decoding.
-- AMOLED panel init sequence.
 - ES7210 codec initialization and I2S DMA capture.
 - ES8311 playback and PA pop suppression sequence.
 - TLS HTTPS, ASR, and chat calls.
+- Animated pet mood transitions and richer response presentation.
 - Production secret hardening with ESP-IDF NVS encryption:
   - flash encryption plus `nvs_keys`, or
   - HMAC eFuse key derivation.

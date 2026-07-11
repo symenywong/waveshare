@@ -143,7 +143,7 @@ static const char *ui_status_for_message(aiqa_ui_message_t message)
     if (message.error != AIQA_ERROR_NONE) {
         switch (message.error) {
         case AIQA_ERROR_CONFIG_MISSING:
-            return "CONFIG MISSING";
+            return "SETUP NEEDED";
         case AIQA_ERROR_CONFIG_CORRUPT:
             return "CONFIG ERROR";
         case AIQA_ERROR_NETWORK_FAILED:
@@ -171,7 +171,7 @@ static const char *ui_status_for_message(aiqa_ui_message_t message)
 
     switch (message.state) {
     case AIQA_STATE_BOOT:
-        return "BOOTING";
+        return "WAKING UP";
     case AIQA_STATE_CONFIG_CHECK:
         return "CONFIG CHECK";
     case AIQA_STATE_NETWORK_CONNECTING:
@@ -198,7 +198,7 @@ static const char *ui_detail_for_message(aiqa_ui_message_t message)
     if (message.error != AIQA_ERROR_NONE) {
         switch (message.error) {
         case AIQA_ERROR_CONFIG_MISSING:
-            return "DEVICE NEEDS NVS CONFIG";
+            return "NVS CONFIG MISSING";
         case AIQA_ERROR_CONFIG_CORRUPT:
             return "CHECK PROVISION DATA";
         case AIQA_ERROR_NETWORK_FAILED:
@@ -225,13 +225,13 @@ static const char *ui_detail_for_message(aiqa_ui_message_t message)
 
     switch (message.state) {
     case AIQA_STATE_BOOT:
-        return "STARTING RUNTIME";
+        return "PET IS WAKING";
     case AIQA_STATE_CONFIG_CHECK:
         return "READING DEVICE CONFIG";
     case AIQA_STATE_NETWORK_CONNECTING:
         return "JOINING WIFI";
     case AIQA_STATE_IDLE:
-        return "HOLD BUTTON TO TALK";
+        return "HOLD BUTTON TO CHAT";
     case AIQA_STATE_RECORDING:
         return "SPEAK NOW";
     case AIQA_STATE_TRANSCRIBING:
@@ -264,14 +264,14 @@ static const char *ui_hint_for_message(aiqa_ui_message_t message)
     case AIQA_STATE_NETWORK_CONNECTING:
         return "WAIT FOR NETWORK";
     default:
-        return "AI QA DEVICE";
+        return "AI PET COMPANION";
     }
 }
 
 static uint16_t ui_accent_for_message(aiqa_ui_message_t message)
 {
     if (message.error != AIQA_ERROR_NONE) {
-        return message.error == AIQA_ERROR_CONFIG_MISSING ? 0xFD20 : 0xF800;
+        return 0xFD20;
     }
 
     switch (message.state) {
@@ -298,6 +298,34 @@ static uint16_t ui_accent_for_message(aiqa_ui_message_t message)
 static bool ui_is_error_message(aiqa_ui_message_t message)
 {
     return message.error != AIQA_ERROR_NONE && message.error != AIQA_ERROR_CONFIG_MISSING;
+}
+
+static board_wave_175c_pet_expression_t ui_expression_for_message(aiqa_ui_message_t message)
+{
+    if (message.error != AIQA_ERROR_NONE) {
+        return message.error == AIQA_ERROR_CONFIG_MISSING
+                   ? BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS
+                   : BOARD_WAVE_175C_PET_EXPRESSION_WORRIED;
+    }
+
+    switch (message.state) {
+    case AIQA_STATE_BOOT:
+        return BOARD_WAVE_175C_PET_EXPRESSION_SLEEPY;
+    case AIQA_STATE_CONFIG_CHECK:
+        return BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS;
+    case AIQA_STATE_NETWORK_CONNECTING:
+    case AIQA_STATE_TRANSCRIBING:
+    case AIQA_STATE_ASR_JOB_PENDING:
+    case AIQA_STATE_THINKING:
+        return BOARD_WAVE_175C_PET_EXPRESSION_THINKING;
+    case AIQA_STATE_RECORDING:
+        return BOARD_WAVE_175C_PET_EXPRESSION_LISTENING;
+    case AIQA_STATE_IDLE:
+    case AIQA_STATE_IDLE_WITH_RESULT:
+        return BOARD_WAVE_175C_PET_EXPRESSION_HAPPY;
+    default:
+        return BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS;
+    }
 }
 
 esp_err_t aiqa_runtime_post_event(aiqa_event_t event)
@@ -425,12 +453,13 @@ static void ui_task(void *arg)
     if (display_ret == ESP_OK) {
         display_ready = true;
         const board_wave_175c_display_page_t boot_page = {
-            .title = "AI QA",
-            .status = "BOOTING",
-            .detail = "DISPLAY ONLINE",
+            .title = "AI PET",
+            .status = "WAKING UP",
+            .detail = "PET IS WAKING",
             .hint = "WAIT RUNTIME",
             .accent_rgb565 = 0x001F,
             .is_error = false,
+            .expression = BOARD_WAVE_175C_PET_EXPRESSION_SLEEPY,
         };
         display_ret = board_wave_175c_display_show_page(&boot_page);
         if (display_ret != ESP_OK) {
@@ -456,12 +485,13 @@ static void ui_task(void *arg)
 
         if (display_ready) {
             const board_wave_175c_display_page_t page = {
-                .title = "AI QA",
+                .title = "AI PET",
                 .status = ui_status_for_message(message),
                 .detail = ui_detail_for_message(message),
                 .hint = ui_hint_for_message(message),
                 .accent_rgb565 = ui_accent_for_message(message),
                 .is_error = ui_is_error_message(message),
+                .expression = ui_expression_for_message(message),
             };
             display_ret = board_wave_175c_display_show_page(&page);
             if (display_ret != ESP_OK) {

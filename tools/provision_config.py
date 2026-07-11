@@ -34,7 +34,7 @@ def reject_cli_api_key(argv: list[str]) -> None:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     reject_cli_api_key(argv)
-    parser = argparse.ArgumentParser(description="Validate and stage AI QA provider configuration.")
+    parser = argparse.ArgumentParser(description="Validate and stage AI Pet provider configuration.")
     parser.add_argument("--provider", required=True)
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--model", required=True)

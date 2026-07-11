@@ -1,1 +1,1 @@
-"""Host-side helpers for Waveshare AI QA."""
+"""Host-side helpers for Waveshare AI Pet."""

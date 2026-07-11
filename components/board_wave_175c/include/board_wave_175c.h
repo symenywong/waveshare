@@ -19,6 +19,15 @@ typedef struct {
     uint32_t missing_required_mask;
 } board_wave_175c_i2c_scan_result_t;
 
+typedef enum {
+    BOARD_WAVE_175C_PET_EXPRESSION_SLEEPY = 0,
+    BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS,
+    BOARD_WAVE_175C_PET_EXPRESSION_HAPPY,
+    BOARD_WAVE_175C_PET_EXPRESSION_LISTENING,
+    BOARD_WAVE_175C_PET_EXPRESSION_THINKING,
+    BOARD_WAVE_175C_PET_EXPRESSION_WORRIED,
+} board_wave_175c_pet_expression_t;
+
 typedef struct {
     const char *title;
     const char *status;
@@ -26,6 +35,7 @@ typedef struct {
     const char *hint;
     uint16_t accent_rgb565;
     bool is_error;
+    board_wave_175c_pet_expression_t expression;
 } board_wave_175c_display_page_t;
 
 esp_err_t board_wave_175c_init_minimal(void);
