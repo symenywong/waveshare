@@ -62,6 +62,9 @@ selection, TLS/HTTP behavior, and runtime ASR events before microphone PCM is
 available.
 For Phase 7, the ASR transcript is handed to the configured Qwen chat model and
 the result maps back into the pet state machine.
+Phase 9 adds release-hardening contracts for repeated PTT cycles, minimum heap
+before model requests, provider rate-limit cooldown, and privacy defaults that
+keep transcripts and answers out of logs.
 
 ## Configuration
 

@@ -247,6 +247,24 @@ Not yet implemented:
 - MiniMax-specific response metadata handling beyond OpenAI-compatible
   `message.content`.
 
+## Current Hardening Scope
+
+Implemented:
+
+- State-machine soak contract runs 200 repeated PTT/ASR/chat cycles.
+- Release hardening policy contract defines:
+  - minimum free heap before model requests
+  - default provider rate-limit cooldown
+  - maximum consecutive provider failures
+  - transcript and answer redaction defaults
+- Host contract tests verify heap gating and cooldown calculations.
+
+Not yet implemented:
+
+- Runtime heap gate enforcement before each ASR/chat HTTP request.
+- Runtime cooldown persistence across reboot.
+- Long-running on-device soak with Wi-Fi and provider APIs.
+
 Not yet implemented:
 
 - AXP2101 register reads / PWR event decoding.

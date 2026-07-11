@@ -162,6 +162,77 @@ class CContractTests(unittest.TestCase):
             ["components/app_core/include"],
         )
 
+    def test_state_machine_soaks_repeated_ptt_chat_cycles(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_state_machine.h"
+                #include <assert.h>
+
+                static void dispatch(aiqa_state_machine_t *m, aiqa_event_type_t type, aiqa_state_t expected) {
+                    aiqa_event_t event = {.type = type, .error = AIQA_ERROR_NONE, .value = 0};
+                    aiqa_transition_t t = aiqa_state_machine_dispatch(m, event);
+                    assert(t.accepted);
+                    assert(m->state == expected);
+                }
+
+                int main(void) {
+                    aiqa_state_machine_t machine;
+                    aiqa_state_machine_init(&machine);
+                    dispatch(&machine, AIQA_EVENT_BOOTED, AIQA_STATE_CONFIG_CHECK);
+                    dispatch(&machine, AIQA_EVENT_CONFIG_READY, AIQA_STATE_NETWORK_CONNECTING);
+                    dispatch(&machine, AIQA_EVENT_NETWORK_READY, AIQA_STATE_IDLE);
+
+                    for (int cycle = 0; cycle < 200; ++cycle) {
+                        dispatch(&machine, AIQA_EVENT_PRESS_START, AIQA_STATE_RECORDING);
+                        dispatch(&machine, AIQA_EVENT_PRESS_END, AIQA_STATE_TRANSCRIBING);
+                        dispatch(&machine, AIQA_EVENT_ASR_STARTED, AIQA_STATE_TRANSCRIBING);
+                        dispatch(&machine, AIQA_EVENT_ASR_DONE, AIQA_STATE_THINKING);
+                        dispatch(&machine, AIQA_EVENT_CHAT_STARTED, AIQA_STATE_THINKING);
+                        dispatch(&machine, AIQA_EVENT_CHAT_DONE, AIQA_STATE_IDLE_WITH_RESULT);
+                    }
+                    assert(machine.transition_count >= 800);
+                    assert(machine.state == AIQA_STATE_IDLE_WITH_RESULT);
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_state_machine.c"],
+            ["components/app_core/include"],
+        )
+
+    def test_release_hardening_policy_contract(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_hardening.h"
+                #include <assert.h>
+
+                int main(void) {
+                    aiqa_hardening_policy_t policy = aiqa_hardening_default_policy();
+                    assert(aiqa_hardening_policy_is_safe(&policy));
+                    assert(policy.redact_transcripts);
+                    assert(policy.redact_answers);
+
+                    assert(!aiqa_hardening_heap_allows_model_request(&policy, policy.min_model_heap_bytes - 1));
+                    assert(aiqa_hardening_heap_allows_model_request(&policy, policy.min_model_heap_bytes));
+
+                    assert(aiqa_hardening_rate_limit_until_ms(&policy, 1000, 0) ==
+                           1000 + policy.rate_limit_cooldown_ms);
+                    assert(aiqa_hardening_rate_limit_until_ms(&policy, 1000, 30000) == 31000);
+                    assert(aiqa_hardening_request_in_cooldown(1500, 31000));
+                    assert(!aiqa_hardening_request_in_cooldown(31000, 31000));
+
+                    policy.max_consecutive_provider_failures = 0;
+                    assert(!aiqa_hardening_policy_is_safe(&policy));
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_hardening.c"],
+            ["components/app_core/include"],
+        )
+
     def test_provider_capabilities_for_default_qwen(self):
         self.compile_and_run(
             textwrap.dedent(
