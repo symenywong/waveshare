@@ -92,6 +92,18 @@ esp_err_t aiqa_config_load_from_nvs(aiqa_config_snapshot_t *snapshot)
                                    sizeof(snapshot->config.base_url));
     }
     if (ret == ESP_OK) {
+        ret = read_optional_string(handle, "asr_provider", snapshot->config.asr_provider,
+                                   sizeof(snapshot->config.asr_provider));
+    }
+    if (ret == ESP_OK) {
+        ret = read_optional_string(handle, "asr_model", snapshot->config.asr_model,
+                                   sizeof(snapshot->config.asr_model));
+    }
+    if (ret == ESP_OK) {
+        ret = read_optional_string(handle, "asr_base_url", snapshot->config.asr_base_url,
+                                   sizeof(snapshot->config.asr_base_url));
+    }
+    if (ret == ESP_OK) {
         ret = read_optional_u8(handle, "stream", &snapshot->config.stream);
     }
     if (ret == ESP_OK) {

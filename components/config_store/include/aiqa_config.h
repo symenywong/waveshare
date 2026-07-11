@@ -20,6 +20,9 @@ typedef struct {
     char active_provider[AIQA_MAX_PROVIDER_ID_LEN];
     char model[AIQA_MAX_MODEL_LEN];
     char base_url[AIQA_MAX_BASE_URL_LEN];
+    char asr_provider[AIQA_MAX_PROVIDER_ID_LEN];
+    char asr_model[AIQA_MAX_MODEL_LEN];
+    char asr_base_url[AIQA_MAX_BASE_URL_LEN];
     bool stream;
     bool hide_reasoning;
     int max_completion_tokens;

@@ -161,7 +161,8 @@ def validate_wifi_config(ssid: str, password: str) -> Dict[str, str]:
 
 
 def build_nvs_rows(
-    validated_provider: Mapping[str, Any],
+    validated_chat_provider: Mapping[str, Any],
+    validated_asr_provider: Mapping[str, Any],
     api_key: str,
     wifi_config: Mapping[str, str],
 ) -> list[list[str]]:
@@ -169,9 +170,12 @@ def build_nvs_rows(
         ["key", "type", "encoding", "value"],
         ["aiqa", "namespace", "", ""],
         ["version", "data", "u32", "1"],
-        ["provider", "data", "string", str(validated_provider["provider"])],
-        ["model", "data", "string", str(validated_provider["model"])],
-        ["base_url", "data", "string", str(validated_provider["base_url"])],
+        ["provider", "data", "string", str(validated_chat_provider["provider"])],
+        ["model", "data", "string", str(validated_chat_provider["model"])],
+        ["base_url", "data", "string", str(validated_chat_provider["base_url"])],
+        ["asr_provider", "data", "string", str(validated_asr_provider["provider"])],
+        ["asr_model", "data", "string", str(validated_asr_provider["model"])],
+        ["asr_base_url", "data", "string", str(validated_asr_provider["base_url"])],
         ["stream", "data", "u8", "1"],
         ["hide_reason", "data", "u8", "1"],
         ["max_tokens", "data", "i32", "768"],

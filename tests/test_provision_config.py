@@ -57,6 +57,7 @@ class ProvisionConfigTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("sk-***cdef", result.stdout)
+        self.assertIn("dashscope_qwen_asr_flash", result.stdout)
         self.assertNotIn("sk-1234567890abcdef", result.stdout + result.stderr)
 
     def test_nvs_csv_contains_real_key_but_stdout_stays_redacted(self):
@@ -95,6 +96,9 @@ class ProvisionConfigTests(unittest.TestCase):
             self.assertIn("aiqa,namespace,,", csv_text)
             self.assertIn("chat_key,data,string,sk-1234567890abcdef", csv_text)
             self.assertIn("asr_key,data,string,sk-1234567890abcdef", csv_text)
+            self.assertIn("asr_provider,data,string,dashscope_qwen_asr_flash", csv_text)
+            self.assertIn("asr_model,data,string,qwen3-asr-flash", csv_text)
+            self.assertIn("asr_base_url,data,string,https://dashscope.aliyuncs.com/compatible-mode/v1", csv_text)
             self.assertIn("wifi_ssid,data,string,lab-wifi", csv_text)
             self.assertEqual(nvs_csv.stat().st_mode & 0o777, 0o600)
 

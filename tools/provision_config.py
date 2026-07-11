@@ -38,6 +38,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--provider", required=True)
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--asr-provider", default="dashscope_qwen_asr_flash")
+    parser.add_argument("--asr-base-url", default="https://dashscope.aliyuncs.com/compatible-mode/v1")
+    parser.add_argument("--asr-model", default="qwen3-asr-flash")
     parser.add_argument("--key-env", default="AIQA_API_KEY")
     parser.add_argument("--wifi-ssid", default="")
     parser.add_argument("--wifi-password", default="")
@@ -73,12 +76,22 @@ def main(argv: list[str] | None = None) -> int:
     api_key = read_api_key(args.key_env)
 
     try:
+        catalog = ProviderCatalog.default()
         validated = validate_provider_config(
-            ProviderCatalog.default(),
+            catalog,
             {
                 "provider": args.provider,
                 "base_url": args.base_url,
                 "model": args.model,
+                "api_key": api_key,
+            },
+        )
+        validated_asr = validate_provider_config(
+            catalog,
+            {
+                "provider": args.asr_provider,
+                "base_url": args.asr_base_url,
+                "model": args.asr_model,
                 "api_key": api_key,
             },
         )
@@ -99,6 +112,12 @@ def main(argv: list[str] | None = None) -> int:
         "model": validated["model"],
         "api_key": validated["api_key_redacted"],
         "capabilities": validated["capabilities"],
+        "asr": {
+            "provider": validated_asr["provider"],
+            "base_url": validated_asr["base_url"],
+            "model": validated_asr["model"],
+            "capabilities": validated_asr["capabilities"],
+        },
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
 
@@ -109,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.nvs_csv is not None and not args.dry_run:
         assert wifi_config is not None
         try:
-            write_nvs_csv(args.nvs_csv, build_nvs_rows(validated, api_key, wifi_config))
+            write_nvs_csv(args.nvs_csv, build_nvs_rows(validated, validated_asr, api_key, wifi_config))
         except ConfigValidationError as exc:
             print(f"Invalid configuration: {exc}", file=sys.stderr)
             return 1

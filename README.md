@@ -40,6 +40,7 @@ On boot the current firmware prints:
 - NVS provisioning status
 - Wi-Fi/SNTP network task status after provisioning
 - fixed-text Qwen chat bring-up status after network readiness
+- static Qwen ASR sample transcription status after PTT release
 
 Local host-side checks:
 
@@ -59,6 +60,10 @@ Long-pressing BOOT now drives the runtime into the `LISTENING` pet state and
 release moves it toward transcription. The actual ES7210/I2S PCM capture driver
 is still staged, so Phase 5 verifies interaction timing and bounded recording
 ownership before wiring real microphone samples into ASR.
+For Phase 6, transcription uses a static public audio URL through Qwen ASR via
+the OpenAI-compatible `chat/completions` endpoint; this proves provider
+selection, TLS/HTTP behavior, and runtime ASR events before microphone PCM is
+available.
 
 ## Configuration
 
@@ -70,6 +75,9 @@ printf '%s\n' 'sk-...' | python3 tools/provision_config.py \
   --provider dashscope_openai_chat \
   --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
   --model qwen3.7-max \
+  --asr-provider dashscope_qwen_asr_flash \
+  --asr-base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  --asr-model qwen3-asr-flash \
   --dry-run
 ```
 
@@ -83,6 +91,9 @@ printf '%s\n' "$AIQA_API_KEY" | python3 tools/provision_config.py \
   --provider dashscope_openai_chat \
   --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
   --model qwen3.7-max \
+  --asr-provider dashscope_qwen_asr_flash \
+  --asr-base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  --asr-model qwen3-asr-flash \
   --wifi-ssid "$WIFI_SSID" \
   --wifi-password "$WIFI_PASSWORD" \
   --nvs-csv aiqa.secrets.csv \

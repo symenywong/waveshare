@@ -72,7 +72,42 @@ aiqa_config_t aiqa_config_default(void)
     (void)snprintf(config.active_provider, sizeof(config.active_provider), "%s", AIQA_PROVIDER_DASHSCOPE_CHAT);
     (void)snprintf(config.model, sizeof(config.model), "%s", AIQA_DEFAULT_QWEN_MODEL);
     (void)snprintf(config.base_url, sizeof(config.base_url), "%s", "https://dashscope.aliyuncs.com/compatible-mode/v1");
+    (void)snprintf(config.asr_provider, sizeof(config.asr_provider), "%s", AIQA_PROVIDER_DASHSCOPE_ASR_FLASH);
+    (void)snprintf(config.asr_model, sizeof(config.asr_model), "%s", AIQA_DEFAULT_QWEN_ASR_MODEL);
+    (void)snprintf(config.asr_base_url, sizeof(config.asr_base_url), "%s",
+                   "https://dashscope.aliyuncs.com/compatible-mode/v1");
     return config;
+}
+
+static aiqa_config_status_t validate_provider_endpoint(
+    const char *provider,
+    const char *model,
+    const char *base_url,
+    bool require_chat,
+    bool require_audio)
+{
+    const aiqa_provider_caps_t *caps = aiqa_provider_caps_for(provider);
+    if (caps == NULL) {
+        return AIQA_CONFIG_ERR_PROVIDER;
+    }
+    if ((require_chat && !caps->supports_chat_stream) ||
+        (require_audio && caps->max_audio_bytes == 0 && !caps->supports_data_uri_audio &&
+         !caps->requires_public_audio_url)) {
+        return AIQA_CONFIG_ERR_PROVIDER;
+    }
+    if (model == NULL || model[0] == '\0' || has_space(model)) {
+        return AIQA_CONFIG_ERR_MODEL;
+    }
+    if (!aiqa_provider_model_allowed(provider, model)) {
+        return AIQA_CONFIG_ERR_MODEL;
+    }
+
+    char host[96];
+    if (!extract_https_host(base_url, host, sizeof(host)) ||
+        !aiqa_provider_host_allowed(provider, host)) {
+        return AIQA_CONFIG_ERR_BASE_URL;
+    }
+    return AIQA_CONFIG_OK;
 }
 
 aiqa_config_status_t aiqa_config_validate(const aiqa_config_t *config)
@@ -80,22 +115,23 @@ aiqa_config_status_t aiqa_config_validate(const aiqa_config_t *config)
     if (config == NULL || config->config_version != AIQA_CONFIG_VERSION) {
         return AIQA_CONFIG_ERR_VERSION;
     }
-    if (!aiqa_provider_is_known(config->active_provider)) {
-        return AIQA_CONFIG_ERR_PROVIDER;
-    }
-    if (config->model[0] == '\0' || has_space(config->model)) {
-        return AIQA_CONFIG_ERR_MODEL;
-    }
-    if (!aiqa_provider_model_allowed(config->active_provider, config->model)) {
-        return AIQA_CONFIG_ERR_MODEL;
+
+    aiqa_config_status_t status = validate_provider_endpoint(
+        config->active_provider,
+        config->model,
+        config->base_url,
+        true,
+        false);
+    if (status != AIQA_CONFIG_OK) {
+        return status;
     }
 
-    char host[96];
-    if (!extract_https_host(config->base_url, host, sizeof(host)) ||
-        !aiqa_provider_host_allowed(config->active_provider, host)) {
-        return AIQA_CONFIG_ERR_BASE_URL;
-    }
-    return AIQA_CONFIG_OK;
+    return validate_provider_endpoint(
+        config->asr_provider,
+        config->asr_model,
+        config->asr_base_url,
+        false,
+        true);
 }
 
 const char *aiqa_config_status_name(aiqa_config_status_t status)

@@ -223,6 +223,70 @@ class CContractTests(unittest.TestCase):
             ],
         )
 
+    def test_asr_protocol_builds_static_sample_request_without_leaking_secret(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_asr_protocol.h"
+                #include "aiqa_config.h"
+                #include <assert.h>
+                #include <string.h>
+
+                int main(void) {
+                    aiqa_config_t config = aiqa_config_default();
+                    aiqa_asr_options_t options = {
+                        .audio_ref = AIQA_ASR_STATIC_SAMPLE_URL,
+                        .language_hint = "zh",
+                        .enable_itn = true,
+                    };
+
+                    char url[AIQA_ASR_ENDPOINT_MAX_LEN] = {0};
+                    aiqa_asr_status_t status = aiqa_asr_build_endpoint_url(
+                        config.asr_base_url,
+                        url,
+                        sizeof(url));
+                    assert(status == AIQA_ASR_OK);
+                    assert(strcmp(url, "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions") == 0);
+
+                    char body[AIQA_ASR_REQUEST_MAX_LEN] = {0};
+                    status = aiqa_asr_build_request_json(&config, &options, body, sizeof(body));
+                    assert(status == AIQA_ASR_OK);
+                    assert(strstr(body, "\\"model\\":\\"qwen3-asr-flash\\"") != 0);
+                    assert(strstr(body, "\\"type\\":\\"input_audio\\"") != 0);
+                    assert(strstr(body, AIQA_ASR_STATIC_SAMPLE_URL) != 0);
+                    assert(strstr(body, "\\"language\\":\\"zh\\"") != 0);
+                    assert(strstr(body, "\\"enable_itn\\":true") != 0);
+                    assert(strstr(body, "sk-") == 0);
+
+                    char transcript[128] = {0};
+                    status = aiqa_asr_parse_transcript_text(
+                        "{\\"choices\\":[{\\"message\\":{\\"content\\":\\"今天天气不错\\"}}]}",
+                        transcript,
+                        sizeof(transcript));
+                    assert(status == AIQA_ASR_OK);
+                    assert(strcmp(transcript, "今天天气不错") == 0);
+
+                    assert(aiqa_asr_status_from_http_status(200) == AIQA_ASR_OK);
+                    assert(aiqa_asr_status_from_http_status(401) == AIQA_ASR_ERR_AUTH);
+                    assert(aiqa_asr_status_from_http_status(429) == AIQA_ASR_ERR_RATE_LIMITED);
+                    assert(aiqa_asr_status_from_http_status(504) == AIQA_ASR_ERR_TIMEOUT);
+                    assert(aiqa_asr_status_from_http_status(500) == AIQA_ASR_ERR_PROVIDER);
+                    return 0;
+                }
+                """
+            ),
+            [
+                "components/asr_client/src/aiqa_asr_protocol.c",
+                "components/config_store/src/aiqa_config.c",
+                "components/provider_common/src/aiqa_provider.c",
+            ],
+            [
+                "components/asr_client/include",
+                "components/config_store/include",
+                "components/provider_common/include",
+            ],
+        )
+
     def test_board_i2c_required_device_contract(self):
         self.compile_and_run(
             textwrap.dedent(
@@ -452,6 +516,7 @@ class CContractTests(unittest.TestCase):
                 int main(void) {
                     aiqa_config_t config = aiqa_config_default();
                     assert(aiqa_config_validate(&config) == AIQA_CONFIG_OK);
+                    assert(aiqa_provider_model_allowed(config.asr_provider, config.asr_model));
 
                     (void)snprintf(config.base_url, sizeof(config.base_url), "%s",
                                    "https://evil.example.com/compatible-mode/v1");
@@ -467,6 +532,15 @@ class CContractTests(unittest.TestCase):
                     (void)snprintf(config.model, sizeof(config.model), "%s",
                                    AIQA_DEFAULT_MINIMAX_MODEL);
                     assert(aiqa_config_validate(&config) == AIQA_CONFIG_ERR_BASE_URL);
+
+                    config = aiqa_config_default();
+                    (void)snprintf(config.asr_base_url, sizeof(config.asr_base_url), "%s",
+                                   "https://evil.example.com/compatible-mode/v1");
+                    assert(aiqa_config_validate(&config) == AIQA_CONFIG_ERR_BASE_URL);
+
+                    config = aiqa_config_default();
+                    (void)snprintf(config.asr_model, sizeof(config.asr_model), "%s", "qwen-plus");
+                    assert(aiqa_config_validate(&config) == AIQA_CONFIG_ERR_MODEL);
 
                     aiqa_secret_config_t secrets = {0};
                     assert(aiqa_secret_config_validate(&secrets) == AIQA_SECRET_ERR_WIFI_SSID);

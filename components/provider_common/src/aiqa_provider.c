@@ -121,7 +121,7 @@ bool aiqa_provider_model_allowed(const char *provider_id, const char *model)
         AIQA_DEFAULT_MINIMAX_MODEL,
     };
     static const char *const dashscope_asr_models[] = {
-        "qwen3-asr-flash",
+        AIQA_DEFAULT_QWEN_ASR_MODEL,
     };
 
     if (provider_id == NULL || model == NULL) {

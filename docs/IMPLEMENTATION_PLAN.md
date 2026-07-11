@@ -83,6 +83,9 @@ Implemented:
   - `provider`
   - `model`
   - `base_url`
+  - `asr_provider`
+  - `asr_model`
+  - `asr_base_url`
   - `stream`
   - `hide_reason`
   - `max_tokens`
@@ -96,6 +99,9 @@ Implemented:
 - Sensitive NVS CSV output created atomically with `0600` permissions.
 - `asr_key` is currently populated from the chat API key by the provisioning
   helper; a separate ASR key can be added when provider mix requires it.
+- Chat and ASR provider/model/base URL are stored independently, with legacy
+  NVS partitions falling back to default Qwen ASR values when `asr_*` keys are
+  absent.
 - Runtime NVS loading and validation.
 - Runtime state now reports:
   - `CONFIG_MISSING` when `aiqa` namespace is absent.
@@ -176,12 +182,34 @@ Not yet implemented:
 - I2S DMA PCM capture into PSRAM.
 - Passing recorded PCM bytes into ASR.
 
+## Current ASR Scope
+
+Implemented:
+
+- `asr_client` component for one-shot OpenAI-compatible Qwen ASR requests.
+- DashScope ASR endpoint construction:
+  - configured ASR base URL plus `/chat/completions`
+  - default model `qwen3-asr-flash`
+  - static public audio URL bring-up request
+- Request JSON builder using `input_audio.data`, language hint, and ITN option.
+- ESP-IDF `esp_http_client` transport with certificate bundle attachment.
+- HTTP/auth/rate-limit/timeout/provider failures mapped back into runtime
+  events.
+- Runtime `asr_task` starts after PTT release and posts `ASR_DONE` or failure.
+- Host contract tests for ASR request formatting, response parsing, provider
+  config separation, and provisioning CSV output.
+
+Not yet implemented:
+
+- Feeding real recorded PCM into ASR.
+- Storing transcript text for downstream chat.
+- MiniMax or alternate ASR providers.
+
 Not yet implemented:
 
 - AXP2101 register reads / PWR event decoding.
 - ES7210 codec initialization and I2S DMA capture.
 - ES8311 playback and PA pop suppression sequence.
-- ASR calls.
 - Animated pet mood transitions and richer response presentation.
 - Production secret hardening with ESP-IDF NVS encryption:
   - flash encryption plus `nvs_keys`, or

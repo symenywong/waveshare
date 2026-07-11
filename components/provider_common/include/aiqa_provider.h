@@ -12,6 +12,7 @@ extern "C" {
 #define AIQA_PROVIDER_MINIMAX_CHAT "minimax_openai_chat"
 #define AIQA_PROVIDER_DASHSCOPE_ASR_FLASH "dashscope_qwen_asr_flash"
 #define AIQA_DEFAULT_QWEN_MODEL "qwen3.7-max"
+#define AIQA_DEFAULT_QWEN_ASR_MODEL "qwen3-asr-flash"
 #define AIQA_DEFAULT_MINIMAX_MODEL "MiniMax-M3"
 
 typedef enum {

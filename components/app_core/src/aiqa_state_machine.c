@@ -135,6 +135,9 @@ aiqa_transition_t aiqa_state_machine_dispatch(aiqa_state_machine_t *machine, aiq
         }
         break;
     case AIQA_STATE_TRANSCRIBING:
+        if (event.type == AIQA_EVENT_ASR_STARTED) {
+            return make_transition(machine, AIQA_STATE_TRANSCRIBING, AIQA_ERROR_NONE, true);
+        }
         if (event.type == AIQA_EVENT_ASR_JOB_SUBMITTED) {
             return make_transition(machine, AIQA_STATE_ASR_JOB_PENDING, AIQA_ERROR_NONE, true);
         }
