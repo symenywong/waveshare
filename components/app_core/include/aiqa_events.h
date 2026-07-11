@@ -1,0 +1,67 @@
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum {
+    AIQA_EVENT_BOOTED = 0,
+    AIQA_EVENT_CONFIG_READY,
+    AIQA_EVENT_CONFIG_MISSING,
+    AIQA_EVENT_CONFIG_CORRUPT,
+    AIQA_EVENT_NETWORK_CONNECTING,
+    AIQA_EVENT_NETWORK_READY,
+    AIQA_EVENT_NETWORK_FAILED,
+    AIQA_EVENT_PRESS_START,
+    AIQA_EVENT_PRESS_END,
+    AIQA_EVENT_CANCEL,
+    AIQA_EVENT_AUDIO_TOO_LONG,
+    AIQA_EVENT_ASR_STARTED,
+    AIQA_EVENT_ASR_JOB_SUBMITTED,
+    AIQA_EVENT_ASR_DONE,
+    AIQA_EVENT_ASR_FAILED,
+    AIQA_EVENT_CHAT_STARTED,
+    AIQA_EVENT_CHAT_TOKEN,
+    AIQA_EVENT_CHAT_DONE,
+    AIQA_EVENT_CHAT_FAILED,
+    AIQA_EVENT_AUTH_FAILED,
+    AIQA_EVENT_TLS_FAILED,
+    AIQA_EVENT_CERT_TIME_INVALID,
+    AIQA_EVENT_RATE_LIMITED,
+    AIQA_EVENT_PROVIDER_UNSUPPORTED,
+    AIQA_EVENT_TIMEOUT,
+    AIQA_EVENT_FACTORY_RESET,
+} aiqa_event_type_t;
+
+typedef enum {
+    AIQA_ERROR_NONE = 0,
+    AIQA_ERROR_CONFIG_MISSING,
+    AIQA_ERROR_CONFIG_CORRUPT,
+    AIQA_ERROR_NETWORK_FAILED,
+    AIQA_ERROR_AUTH_FAILED,
+    AIQA_ERROR_TLS_FAILED,
+    AIQA_ERROR_CERT_TIME_INVALID,
+    AIQA_ERROR_RATE_LIMITED,
+    AIQA_ERROR_PROVIDER_UNSUPPORTED,
+    AIQA_ERROR_AUDIO_TOO_LONG,
+    AIQA_ERROR_ASR_FAILED,
+    AIQA_ERROR_CHAT_FAILED,
+    AIQA_ERROR_TIMEOUT,
+    AIQA_ERROR_CANCELLED,
+} aiqa_error_code_t;
+
+typedef struct {
+    aiqa_event_type_t type;
+    aiqa_error_code_t error;
+    uint32_t value;
+} aiqa_event_t;
+
+const char *aiqa_event_name(aiqa_event_type_t type);
+const char *aiqa_error_name(aiqa_error_code_t error);
+
+#ifdef __cplusplus
+}
+#endif
