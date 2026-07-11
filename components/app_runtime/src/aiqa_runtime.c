@@ -176,10 +176,7 @@ static esp_err_t post_chat_prompt(const char *prompt)
         return ESP_ERR_INVALID_ARG;
     }
 
-    aiqa_chat_command_t command = {
-        .type = AIQA_CHAT_COMMAND_USER_PROMPT,
-        .prompt = {0},
-    };
+    aiqa_chat_command_t command = {.type = AIQA_CHAT_COMMAND_USER_PROMPT, .prompt = {0}};
     (void)snprintf(command.prompt, sizeof(command.prompt), "%s", prompt);
     return post_chat_command(command);
 }
@@ -267,6 +264,7 @@ static void handle_chat_prompt_transition(aiqa_transition_t transition, aiqa_eve
     }
 
     esp_err_t ret = post_chat_prompt(s_latest_transcript);
+    (void)memset(s_latest_transcript, 0, sizeof(s_latest_transcript));
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to post transcript chat prompt: %s", esp_err_to_name(ret));
     }
@@ -700,6 +698,7 @@ static void asr_task(void *arg)
         }
 
         aiqa_event_t event = asr_result_to_event(&result, asr_ret);
+        (void)memset(result.text, 0, sizeof(result.text));
         esp_err_t post_ret = aiqa_runtime_post_event(event);
         if (post_ret != ESP_OK) {
             ESP_LOGE("aiqa_asr", "Failed to post ASR result: %s", esp_err_to_name(post_ret));
@@ -710,7 +709,7 @@ static void asr_task(void *arg)
 static void chat_task(void *arg)
 {
     (void)arg;
-    ESP_LOGI("aiqa_chat", "Chat task ready: fixed prompt Qwen bring-up");
+    ESP_LOGI("aiqa_chat", "Chat task ready: transcript prompt bring-up");
     while (true) {
         aiqa_chat_command_t command;
         if (xQueueReceive(s_chat_queue, &command, portMAX_DELAY) != pdTRUE) {
@@ -741,6 +740,7 @@ static void chat_task(void *arg)
             &s_config_snapshot.secrets,
             command.prompt,
             &result);
+        (void)memset(command.prompt, 0, sizeof(command.prompt));
         if (result.status == AIQA_CHAT_OK) {
             ESP_LOGI("aiqa_chat", "Chat answer ready: %u bytes", (unsigned)strlen(result.text));
         }
