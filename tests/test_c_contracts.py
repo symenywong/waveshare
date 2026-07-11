@@ -150,6 +150,30 @@ class CContractTests(unittest.TestCase):
             ["components/board_wave_175c/include"],
         )
 
+    def test_board_display_pin_contract(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "board_wave_175c_pins.h"
+                #include <assert.h>
+
+                int main(void) {
+                    assert(WAVE_175C_LCD_WIDTH == 466);
+                    assert(WAVE_175C_LCD_HEIGHT == 466);
+                    assert(WAVE_175C_LCD_BITS_PER_PIXEL == 16);
+                    assert(WAVE_175C_LCD_RESET == 39);
+                    assert(WAVE_175C_TOUCH_RST == 40);
+                    assert(WAVE_175C_ES7210_MCLK == 42);
+                    assert(WAVE_175C_LCD_TRANSFER_ROWS > 0);
+                    assert(WAVE_175C_LCD_TRANSFER_ROWS < WAVE_175C_LCD_HEIGHT);
+                    return 0;
+                }
+                """
+            ),
+            [],
+            ["components/board_wave_175c/include"],
+        )
+
     def test_audio_capture_budget_contract(self):
         self.compile_and_run(
             textwrap.dedent(

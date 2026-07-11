@@ -22,7 +22,7 @@ static const char *TAG = "aiqa_runtime";
 #define AIQA_UI_QUEUE_DEPTH 8
 #define AIQA_NET_QUEUE_DEPTH 2
 #define AIQA_TASK_STACK_APP 4096
-#define AIQA_TASK_STACK_UI 4096
+#define AIQA_TASK_STACK_UI 6144
 #define AIQA_TASK_STACK_WORKER 4096
 #define AIQA_TASK_STACK_NET 6144
 
@@ -136,6 +136,33 @@ static void post_ui_state(aiqa_state_t state, aiqa_error_code_t error)
         .error = error,
     };
     (void)xQueueSend(s_ui_queue, &message, 0);
+}
+
+static uint16_t ui_color_for_message(aiqa_ui_message_t message)
+{
+    if (message.error != AIQA_ERROR_NONE || message.state == AIQA_STATE_ERROR) {
+        return 0xF800;
+    }
+
+    switch (message.state) {
+    case AIQA_STATE_BOOT:
+        return 0x001F;
+    case AIQA_STATE_CONFIG_CHECK:
+        return 0xFFE0;
+    case AIQA_STATE_NETWORK_CONNECTING:
+        return 0x07FF;
+    case AIQA_STATE_IDLE:
+    case AIQA_STATE_IDLE_WITH_RESULT:
+        return 0x07E0;
+    case AIQA_STATE_RECORDING:
+        return 0xF81F;
+    case AIQA_STATE_TRANSCRIBING:
+    case AIQA_STATE_ASR_JOB_PENDING:
+    case AIQA_STATE_THINKING:
+        return 0xFD20;
+    default:
+        return 0xFFFF;
+    }
 }
 
 esp_err_t aiqa_runtime_post_event(aiqa_event_t event)
@@ -258,6 +285,18 @@ static void ui_task(void *arg)
 {
     (void)arg;
 
+    bool display_ready = false;
+    esp_err_t display_ret = board_wave_175c_display_init();
+    if (display_ret == ESP_OK) {
+        display_ready = true;
+        display_ret = board_wave_175c_display_draw_test_pattern();
+        if (display_ret != ESP_OK) {
+            ESP_LOGW("aiqa_ui", "LCD test pattern failed: %s", esp_err_to_name(display_ret));
+        }
+    } else {
+        ESP_LOGW("aiqa_ui", "LCD init failed; serial UI remains active: %s", esp_err_to_name(display_ret));
+    }
+
     while (true) {
         aiqa_ui_message_t message;
         if (xQueueReceive(s_ui_queue, &message, portMAX_DELAY) != pdTRUE) {
@@ -270,6 +309,14 @@ static void ui_task(void *arg)
             ESP_LOGW("aiqa_ui", "UI state: %s error=%s",
                      aiqa_state_name(message.state),
                      aiqa_error_name(message.error));
+        }
+
+        if (display_ready) {
+            display_ret = board_wave_175c_display_fill_rgb565(ui_color_for_message(message));
+            if (display_ret != ESP_OK) {
+                ESP_LOGW("aiqa_ui", "LCD state fill failed: %s", esp_err_to_name(display_ret));
+                display_ready = false;
+            }
         }
     }
 }
