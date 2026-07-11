@@ -8,7 +8,7 @@ The first implementation stage establishes the safe runtime skeleton:
 - event-driven FreeRTOS task ownership
 - board constants for the 1.75C hardware
 - I2C scan and required-device detection for PMU/audio codecs
-- CO5300 AMOLED QSPI bring-up with visible state colors
+- CO5300 AMOLED QSPI bring-up with a lightweight text status page
 - BOOT input readout and PA safe-off default
 - bounded 16 kHz/16-bit/mono audio capture budget
 - provider capability contracts for Qwen/DashScope and MiniMax
@@ -33,7 +33,7 @@ On boot the current firmware prints:
 - I2C scan addresses and missing required devices
 - BOOT button pressed/released state
 - audio capture budget
-- AMOLED init status and UI state fill
+- AMOLED init status and UI status-page updates
 - NVS provisioning status
 - Wi-Fi/SNTP network task status after provisioning
 
@@ -45,8 +45,8 @@ python3 -m unittest discover -s tests
 
 The firmware currently stops at `ERROR/CONFIG_MISSING` until the `aiqa` NVS
 namespace is provisioned with Wi-Fi credentials and a chat API key. The AMOLED
-screen should briefly show color bars on boot and then switch to a state color;
-red means the current expected `CONFIG_MISSING` state.
+screen shows a readable status page; without provisioning it should display
+`CONFIG MISSING`, `DEVICE NEEDS NVS CONFIG`, and `RUN PROVISION TOOL`.
 
 ## Configuration
 

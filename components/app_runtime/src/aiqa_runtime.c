@@ -138,10 +138,140 @@ static void post_ui_state(aiqa_state_t state, aiqa_error_code_t error)
     (void)xQueueSend(s_ui_queue, &message, 0);
 }
 
-static uint16_t ui_color_for_message(aiqa_ui_message_t message)
+static const char *ui_status_for_message(aiqa_ui_message_t message)
 {
-    if (message.error != AIQA_ERROR_NONE || message.state == AIQA_STATE_ERROR) {
-        return 0xF800;
+    if (message.error != AIQA_ERROR_NONE) {
+        switch (message.error) {
+        case AIQA_ERROR_CONFIG_MISSING:
+            return "CONFIG MISSING";
+        case AIQA_ERROR_CONFIG_CORRUPT:
+            return "CONFIG ERROR";
+        case AIQA_ERROR_NETWORK_FAILED:
+            return "NETWORK FAILED";
+        case AIQA_ERROR_AUTH_FAILED:
+            return "AUTH FAILED";
+        case AIQA_ERROR_TLS_FAILED:
+            return "TLS FAILED";
+        case AIQA_ERROR_CERT_TIME_INVALID:
+            return "TIME INVALID";
+        case AIQA_ERROR_RATE_LIMITED:
+            return "RATE LIMITED";
+        case AIQA_ERROR_AUDIO_TOO_LONG:
+            return "AUDIO TOO LONG";
+        case AIQA_ERROR_ASR_FAILED:
+            return "ASR FAILED";
+        case AIQA_ERROR_CHAT_FAILED:
+            return "CHAT FAILED";
+        case AIQA_ERROR_TIMEOUT:
+            return "TIMEOUT";
+        default:
+            return "ERROR";
+        }
+    }
+
+    switch (message.state) {
+    case AIQA_STATE_BOOT:
+        return "BOOTING";
+    case AIQA_STATE_CONFIG_CHECK:
+        return "CONFIG CHECK";
+    case AIQA_STATE_NETWORK_CONNECTING:
+        return "CONNECTING";
+    case AIQA_STATE_IDLE:
+        return "READY";
+    case AIQA_STATE_IDLE_WITH_RESULT:
+        return "ANSWER READY";
+    case AIQA_STATE_RECORDING:
+        return "LISTENING";
+    case AIQA_STATE_TRANSCRIBING:
+        return "TRANSCRIBING";
+    case AIQA_STATE_ASR_JOB_PENDING:
+        return "ASR PENDING";
+    case AIQA_STATE_THINKING:
+        return "THINKING";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+static const char *ui_detail_for_message(aiqa_ui_message_t message)
+{
+    if (message.error != AIQA_ERROR_NONE) {
+        switch (message.error) {
+        case AIQA_ERROR_CONFIG_MISSING:
+            return "DEVICE NEEDS NVS CONFIG";
+        case AIQA_ERROR_CONFIG_CORRUPT:
+            return "CHECK PROVISION DATA";
+        case AIQA_ERROR_NETWORK_FAILED:
+            return "CHECK WIFI OR TIME";
+        case AIQA_ERROR_AUTH_FAILED:
+            return "CHECK MODEL API KEY";
+        case AIQA_ERROR_TLS_FAILED:
+        case AIQA_ERROR_CERT_TIME_INVALID:
+            return "CHECK TLS CLOCK";
+        case AIQA_ERROR_RATE_LIMITED:
+            return "MODEL RATE LIMITED";
+        case AIQA_ERROR_AUDIO_TOO_LONG:
+            return "RECORDING TOO LONG";
+        case AIQA_ERROR_ASR_FAILED:
+            return "SPEECH JOB FAILED";
+        case AIQA_ERROR_CHAT_FAILED:
+            return "CHAT REQUEST FAILED";
+        case AIQA_ERROR_TIMEOUT:
+            return "OPERATION TIMEOUT";
+        default:
+            return "SEE SERIAL LOG";
+        }
+    }
+
+    switch (message.state) {
+    case AIQA_STATE_BOOT:
+        return "STARTING RUNTIME";
+    case AIQA_STATE_CONFIG_CHECK:
+        return "READING DEVICE CONFIG";
+    case AIQA_STATE_NETWORK_CONNECTING:
+        return "JOINING WIFI";
+    case AIQA_STATE_IDLE:
+        return "HOLD BUTTON TO TALK";
+    case AIQA_STATE_RECORDING:
+        return "SPEAK NOW";
+    case AIQA_STATE_TRANSCRIBING:
+    case AIQA_STATE_ASR_JOB_PENDING:
+        return "VOICE TO TEXT";
+    case AIQA_STATE_THINKING:
+        return "ASKING ONLINE MODEL";
+    case AIQA_STATE_IDLE_WITH_RESULT:
+        return "ANSWER COMPLETE";
+    default:
+        return "SYSTEM READY";
+    }
+}
+
+static const char *ui_hint_for_message(aiqa_ui_message_t message)
+{
+    if (message.error == AIQA_ERROR_CONFIG_MISSING) {
+        return "RUN PROVISION TOOL";
+    }
+    if (message.error != AIQA_ERROR_NONE) {
+        return "SEE USB SERIAL LOG";
+    }
+
+    switch (message.state) {
+    case AIQA_STATE_IDLE:
+    case AIQA_STATE_IDLE_WITH_RESULT:
+        return "LONG PRESS BOOT";
+    case AIQA_STATE_RECORDING:
+        return "RELEASE TO SEND";
+    case AIQA_STATE_NETWORK_CONNECTING:
+        return "WAIT FOR NETWORK";
+    default:
+        return "AI QA DEVICE";
+    }
+}
+
+static uint16_t ui_accent_for_message(aiqa_ui_message_t message)
+{
+    if (message.error != AIQA_ERROR_NONE) {
+        return message.error == AIQA_ERROR_CONFIG_MISSING ? 0xFD20 : 0xF800;
     }
 
     switch (message.state) {
@@ -163,6 +293,11 @@ static uint16_t ui_color_for_message(aiqa_ui_message_t message)
     default:
         return 0xFFFF;
     }
+}
+
+static bool ui_is_error_message(aiqa_ui_message_t message)
+{
+    return message.error != AIQA_ERROR_NONE && message.error != AIQA_ERROR_CONFIG_MISSING;
 }
 
 esp_err_t aiqa_runtime_post_event(aiqa_event_t event)
@@ -289,9 +424,17 @@ static void ui_task(void *arg)
     esp_err_t display_ret = board_wave_175c_display_init();
     if (display_ret == ESP_OK) {
         display_ready = true;
-        display_ret = board_wave_175c_display_draw_test_pattern();
+        const board_wave_175c_display_page_t boot_page = {
+            .title = "AI QA",
+            .status = "BOOTING",
+            .detail = "DISPLAY ONLINE",
+            .hint = "WAIT RUNTIME",
+            .accent_rgb565 = 0x001F,
+            .is_error = false,
+        };
+        display_ret = board_wave_175c_display_show_page(&boot_page);
         if (display_ret != ESP_OK) {
-            ESP_LOGW("aiqa_ui", "LCD test pattern failed: %s", esp_err_to_name(display_ret));
+            ESP_LOGW("aiqa_ui", "LCD boot page failed: %s", esp_err_to_name(display_ret));
         }
     } else {
         ESP_LOGW("aiqa_ui", "LCD init failed; serial UI remains active: %s", esp_err_to_name(display_ret));
@@ -312,9 +455,17 @@ static void ui_task(void *arg)
         }
 
         if (display_ready) {
-            display_ret = board_wave_175c_display_fill_rgb565(ui_color_for_message(message));
+            const board_wave_175c_display_page_t page = {
+                .title = "AI QA",
+                .status = ui_status_for_message(message),
+                .detail = ui_detail_for_message(message),
+                .hint = ui_hint_for_message(message),
+                .accent_rgb565 = ui_accent_for_message(message),
+                .is_error = ui_is_error_message(message),
+            };
+            display_ret = board_wave_175c_display_show_page(&page);
             if (display_ret != ESP_OK) {
-                ESP_LOGW("aiqa_ui", "LCD state fill failed: %s", esp_err_to_name(display_ret));
+                ESP_LOGW("aiqa_ui", "LCD page draw failed: %s", esp_err_to_name(display_ret));
                 display_ready = false;
             }
         }
