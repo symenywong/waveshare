@@ -122,13 +122,25 @@ aiqa_chat_status_t aiqa_chat_build_request_json(
         return status;
     }
 
-    char options_json[96];
-    const int option_written = snprintf(options_json,
-                                        sizeof(options_json),
-                                        ",\"stream\":%s,\"max_tokens\":%d,\"enable_thinking\":%s,\"messages\":[",
-                                        options->stream ? "true" : "false",
-                                        options->max_completion_tokens,
-                                        options->hide_reasoning ? "false" : "true");
+    char options_json[160];
+    int option_written = -1;
+    if (strcmp(config->active_provider, AIQA_PROVIDER_DASHSCOPE_CHAT) == 0) {
+        option_written = snprintf(options_json,
+                                  sizeof(options_json),
+                                  ",\"stream\":%s,\"max_tokens\":%d,\"enable_thinking\":%s,\"messages\":[",
+                                  options->stream ? "true" : "false",
+                                  options->max_completion_tokens,
+                                  options->hide_reasoning ? "false" : "true");
+    } else if (strcmp(config->active_provider, AIQA_PROVIDER_MINIMAX_CHAT) == 0) {
+        option_written = snprintf(options_json,
+                                  sizeof(options_json),
+                                  ",\"stream\":%s,\"max_completion_tokens\":%d,\"reasoning_split\":%s,\"messages\":[",
+                                  options->stream ? "true" : "false",
+                                  options->max_completion_tokens,
+                                  options->hide_reasoning ? "true" : "false");
+    } else {
+        return AIQA_CHAT_ERR_UNSUPPORTED_PROVIDER;
+    }
     if (option_written < 0 || (size_t)option_written >= sizeof(options_json)) {
         return AIQA_CHAT_ERR_BUFFER_TOO_SMALL;
     }

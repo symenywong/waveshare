@@ -134,6 +134,9 @@ Implemented:
   - non-streaming fixed-text bring-up request
 - Request JSON builder that keeps Authorization secrets out of request-body
   tests and logs.
+- Provider-specific chat request options:
+  - DashScope/Qwen uses `max_tokens` and `enable_thinking`.
+  - MiniMax uses `max_completion_tokens` and `reasoning_split`.
 - ESP-IDF `esp_http_client` transport with certificate bundle attachment.
 - HTTP/auth/rate-limit/timeout/provider failures mapped back into runtime
   events.
@@ -143,12 +146,13 @@ Implemented:
   race warning when the chat worker begins immediately after ASR completion.
 - Host contract tests for request formatting, response parsing, and state
   transitions.
+- Host contract tests cover MiniMax request formatting without Qwen-only
+  fields.
 
 Not yet implemented:
 
 - Streaming chat token display.
 - Real ASR-derived prompts.
-- Separate MiniMax chat adapter.
 - Device-side verified live Qwen call with provisioned Wi-Fi/API credentials.
 
 ## Current Pet UI Scope
@@ -226,6 +230,22 @@ Not yet implemented:
 - Streaming token-by-token answer display.
 - Rendering answer text on the circular screen.
 - Real microphone PCM in the ASR request.
+
+## Current MiniMax Scope
+
+Implemented:
+
+- MiniMax chat provider remains independently selectable from Qwen ASR.
+- Provisioning dry-run and NVS paths can keep MiniMax chat plus default Qwen
+  ASR in the same device config.
+- Chat protocol emits MiniMax-compatible request fields and excludes
+  Qwen-only `enable_thinking`.
+
+Not yet implemented:
+
+- Live MiniMax device call with a MiniMax API key.
+- MiniMax-specific response metadata handling beyond OpenAI-compatible
+  `message.content`.
 
 Not yet implemented:
 

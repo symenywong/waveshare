@@ -102,6 +102,31 @@ class ProvisionConfigTests(unittest.TestCase):
             self.assertIn("wifi_ssid,data,string,lab-wifi", csv_text)
             self.assertEqual(nvs_csv.stat().st_mode & 0o777, 0o600)
 
+    def test_minimax_chat_can_keep_default_qwen_asr(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--provider",
+                "minimax_openai_chat",
+                "--base-url",
+                "https://api.minimax.io/v1",
+                "--model",
+                "MiniMax-M3",
+                "--dry-run",
+            ],
+            cwd=REPO_ROOT,
+            env={"AIQA_API_KEY": "sk-1234567890abcdef"},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('"provider": "minimax_openai_chat"', result.stdout)
+        self.assertIn('"provider": "dashscope_qwen_asr_flash"', result.stdout)
+        self.assertNotIn("sk-1234567890abcdef", result.stdout + result.stderr)
+
     def test_refuses_plaintext_nvs_without_explicit_opt_in(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run(

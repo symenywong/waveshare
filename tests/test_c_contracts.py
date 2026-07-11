@@ -257,6 +257,65 @@ class CContractTests(unittest.TestCase):
             ],
         )
 
+    def test_chat_protocol_builds_minimax_request_without_qwen_only_fields(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_chat_protocol.h"
+                #include "aiqa_config.h"
+                #include "aiqa_provider.h"
+                #include <assert.h>
+                #include <stdio.h>
+                #include <string.h>
+
+                int main(void) {
+                    aiqa_config_t config = aiqa_config_default();
+                    (void)snprintf(config.active_provider, sizeof(config.active_provider), "%s",
+                                   AIQA_PROVIDER_MINIMAX_CHAT);
+                    (void)snprintf(config.model, sizeof(config.model), "%s", AIQA_DEFAULT_MINIMAX_MODEL);
+                    (void)snprintf(config.base_url, sizeof(config.base_url), "%s", "https://api.minimax.io/v1");
+                    assert(aiqa_config_validate(&config) == AIQA_CONFIG_OK);
+
+                    aiqa_chat_options_t options = {
+                        .stream = false,
+                        .hide_reasoning = true,
+                        .max_completion_tokens = 128,
+                    };
+
+                    char url[AIQA_CHAT_ENDPOINT_MAX_LEN] = {0};
+                    assert(aiqa_chat_build_endpoint_url(config.base_url, url, sizeof(url)) == AIQA_CHAT_OK);
+                    assert(strcmp(url, "https://api.minimax.io/v1/chat/completions") == 0);
+
+                    char body[AIQA_CHAT_REQUEST_MAX_LEN] = {0};
+                    aiqa_chat_status_t status = aiqa_chat_build_request_json(
+                        &config,
+                        &options,
+                        "你好，小宠物",
+                        body,
+                        sizeof(body));
+                    assert(status == AIQA_CHAT_OK);
+                    assert(strstr(body, "\\"model\\":\\"MiniMax-M3\\"") != 0);
+                    assert(strstr(body, "\\"max_completion_tokens\\":128") != 0);
+                    assert(strstr(body, "\\"reasoning_split\\":true") != 0);
+                    assert(strstr(body, "\\"enable_thinking\\"") == 0);
+                    assert(strstr(body, "\\"max_tokens\\"") == 0);
+                    assert(strstr(body, "sk-") == 0);
+                    return 0;
+                }
+                """
+            ),
+            [
+                "components/chat_client/src/aiqa_chat_protocol.c",
+                "components/config_store/src/aiqa_config.c",
+                "components/provider_common/src/aiqa_provider.c",
+            ],
+            [
+                "components/chat_client/include",
+                "components/config_store/include",
+                "components/provider_common/include",
+            ],
+        )
+
     def test_asr_protocol_builds_static_sample_request_without_leaking_secret(self):
         self.compile_and_run(
             textwrap.dedent(

@@ -81,6 +81,9 @@ printf '%s\n' 'sk-...' | python3 tools/provision_config.py \
 
 The default chat model ID is `qwen3.7-max`. Keep it as a provider model ID,
 not a display string such as `qwen 3.7 max`.
+MiniMax can be selected as the chat provider with `--provider minimax_openai_chat`,
+`--base-url https://api.minimax.io/v1`, and `--model MiniMax-M3`; ASR stays on
+the independent `--asr-*` settings unless you override them.
 
 To create an ESP-IDF NVS CSV for the device:
 
