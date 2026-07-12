@@ -535,6 +535,7 @@ class CContractTests(unittest.TestCase):
                 """
                 #include "aiqa_chat_protocol.h"
                 #include "aiqa_config.h"
+                #include "aiqa_language.h"
                 #include <assert.h>
                 #include <string.h>
 
@@ -544,6 +545,7 @@ class CContractTests(unittest.TestCase):
                         .stream = true,
                         .hide_reasoning = true,
                         .max_completion_tokens = 64,
+                        .response_language = aiqa_language_chat_code(AIQA_DIALOGUE_LANGUAGE_CHINESE),
                     };
 
                     char body[AIQA_CHAT_REQUEST_MAX_LEN] = {0};
@@ -556,7 +558,18 @@ class CContractTests(unittest.TestCase):
                     assert(status == AIQA_CHAT_OK);
                     assert(strstr(body, "\\"stream\\":true") != 0);
                     assert(strstr(body, "\\"enable_thinking\\":false") != 0);
+                    assert(strstr(body, "Simplified Chinese") != 0);
                     assert(strstr(body, "sk-") == 0);
+
+                    options.response_language = aiqa_language_chat_code(AIQA_DIALOGUE_LANGUAGE_ENGLISH);
+                    status = aiqa_chat_build_request_json(
+                        &config,
+                        &options,
+                        "please use english",
+                        body,
+                        sizeof(body));
+                    assert(status == AIQA_CHAT_OK);
+                    assert(strstr(body, "Reply in English") != 0);
 
                     char delta[64] = {0};
                     status = aiqa_chat_parse_stream_delta_text(
@@ -576,14 +589,53 @@ class CContractTests(unittest.TestCase):
             ),
             [
                 "components/chat_client/src/aiqa_chat_protocol.c",
+                "components/app_core/src/aiqa_language.c",
                 "components/config_store/src/aiqa_config.c",
                 "components/provider_common/src/aiqa_provider.c",
             ],
             [
                 "components/chat_client/include",
+                "components/app_core/include",
                 "components/config_store/include",
                 "components/provider_common/include",
             ],
+        )
+
+    def test_language_switch_commands_detect_chinese_and_english(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_language.h"
+                #include <assert.h>
+                #include <string.h>
+
+                int main(void) {
+                    aiqa_dialogue_language_t language = AIQA_DIALOGUE_LANGUAGE_ENGLISH;
+                    assert(aiqa_language_detect_switch_command("使用中文与我交流", &language));
+                    assert(language == AIQA_DIALOGUE_LANGUAGE_CHINESE);
+                    assert(strcmp(aiqa_language_confirmation(language), "好的，我会用中文和你交流。") == 0);
+                    assert(strcmp(aiqa_language_display_label(language), "CHINESE MODE") == 0);
+                    assert(strcmp(aiqa_language_chat_code(language), "zh") == 0);
+
+                    language = AIQA_DIALOGUE_LANGUAGE_CHINESE;
+                    assert(aiqa_language_detect_switch_command("please speak English with me", &language));
+                    assert(language == AIQA_DIALOGUE_LANGUAGE_ENGLISH);
+                    assert(strcmp(aiqa_language_confirmation(language), "Sure, I will speak English with you.") == 0);
+                    assert(strcmp(aiqa_language_display_label(language), "ENGLISH MODE") == 0);
+                    assert(strcmp(aiqa_language_chat_code(language), "en") == 0);
+
+                    assert(!aiqa_language_detect_switch_command("中文和英文有什么区别", &language));
+                    assert(!aiqa_language_detect_switch_command("苹果用英文怎么说", &language));
+                    assert(!aiqa_language_detect_switch_command("how do you say hello in English", &language));
+                    assert(!aiqa_language_detect_switch_command("", &language));
+                    assert(!aiqa_language_detect_switch_command(0, &language));
+                    assert(!aiqa_language_detect_switch_command("use english", 0));
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_language.c"],
+            ["components/app_core/include"],
         )
 
     def test_chat_protocol_builds_minimax_request_without_qwen_only_fields(self):

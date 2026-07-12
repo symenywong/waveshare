@@ -7,6 +7,7 @@
 #include "aiqa_audio_playback_hw.h"
 #include "aiqa_asr_client.h"
 #include "aiqa_chat_client.h"
+#include "aiqa_language.h"
 #include "aiqa_net_connect.h"
 #include "aiqa_ptt_button.h"
 #include "aiqa_provider.h"
@@ -55,6 +56,7 @@ typedef struct {
 typedef enum {
     AIQA_CHAT_COMMAND_USER_PROMPT = 0,
     AIQA_CHAT_COMMAND_TTS_SELF_TEST,
+    AIQA_CHAT_COMMAND_LOCAL_PET_REPLY,
 } aiqa_chat_command_type_t;
 typedef struct {
     aiqa_chat_command_type_t type;
@@ -93,7 +95,10 @@ static QueueHandle_t s_app_queue, s_ui_queue, s_net_queue, s_chat_queue, s_audio
 static aiqa_config_snapshot_t s_config_snapshot;
 static bool s_config_snapshot_ready;
 static bool s_startup_audio_test_done;
+static bool s_pending_local_pet_reply;
+static aiqa_dialogue_language_t s_dialogue_language = AIQA_DIALOGUE_LANGUAGE_CHINESE;
 static char s_latest_transcript[AIQA_ASR_RESPONSE_TEXT_MAX_LEN];
+static char s_local_pet_reply[AIQA_CHAT_RESPONSE_TEXT_MAX_LEN];
 static aiqa_dialogue_view_t s_latest_dialogue;
 static aiqa_runtime_recording_t s_recording;
 static esp_err_t init_nvs(void)
@@ -202,6 +207,16 @@ static esp_err_t post_tts_self_test(const char *text)
     return post_chat_command(command);
 }
 
+static esp_err_t post_local_pet_reply(const char *text)
+{
+    if (text == NULL || text[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    aiqa_chat_command_t command = {.type = AIQA_CHAT_COMMAND_LOCAL_PET_REPLY, .prompt = {0}};
+    (void)snprintf(command.prompt, sizeof(command.prompt), "%s", text);
+    return post_chat_command(command);
+}
+
 static esp_err_t post_audio_command(aiqa_audio_command_t command)
 {
     if (s_audio_queue == NULL) {
@@ -270,6 +285,8 @@ static void handle_recording_transition(aiqa_transition_t transition)
         aiqa_ptt_policy_t policy = aiqa_ptt_default_policy();
         aiqa_dialogue_view_clear(&s_latest_dialogue);
         (void)memset(s_latest_transcript, 0, sizeof(s_latest_transcript));
+        (void)memset(s_local_pet_reply, 0, sizeof(s_local_pet_reply));
+        s_pending_local_pet_reply = false;
         ret = post_audio_command((aiqa_audio_command_t){
             .type = AIQA_AUDIO_COMMAND_START_RECORDING,
             .max_record_ms = policy.max_record_ms,
@@ -292,11 +309,36 @@ static void handle_chat_prompt_transition(aiqa_transition_t transition, aiqa_eve
         event.type != AIQA_EVENT_ASR_DONE) {
         return;
     }
-    esp_err_t ret = post_chat_prompt(s_latest_transcript);
+    esp_err_t ret = ESP_OK;
+    if (s_pending_local_pet_reply) {
+        ret = post_local_pet_reply(s_local_pet_reply);
+        s_pending_local_pet_reply = false;
+        (void)memset(s_local_pet_reply, 0, sizeof(s_local_pet_reply));
+    } else {
+        ret = post_chat_prompt(s_latest_transcript);
+    }
     (void)memset(s_latest_transcript, 0, sizeof(s_latest_transcript));
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to post transcript chat prompt: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to post transcript follow-up: %s", esp_err_to_name(ret));
     }
+}
+
+static bool handle_language_switch_transcript(const char *transcript)
+{
+    aiqa_dialogue_language_t language = s_dialogue_language;
+    if (!aiqa_language_detect_switch_command(transcript, &language)) {
+        return false;
+    }
+
+    s_dialogue_language = language;
+    s_pending_local_pet_reply = true;
+    (void)snprintf(s_local_pet_reply,
+                   sizeof(s_local_pet_reply),
+                   "%s",
+                   aiqa_language_confirmation(language));
+    aiqa_dialogue_view_set_pet(&s_latest_dialogue, aiqa_language_display_label(language));
+    ESP_LOGI("aiqa_language", "Dialogue language switched to %s", aiqa_language_name(language));
+    return true;
 }
 
 esp_err_t aiqa_runtime_post_event(aiqa_event_t event)
@@ -691,6 +733,7 @@ static void asr_task(void *arg)
         if (result.status == AIQA_ASR_OK) {
             (void)snprintf(s_latest_transcript, sizeof(s_latest_transcript), "%s", result.text);
             aiqa_dialogue_view_set_user(&s_latest_dialogue, result.text);
+            (void)handle_language_switch_transcript(result.text);
             ESP_LOGI("aiqa_asr", "ASR transcript ready: %u bytes", (unsigned)strlen(result.text));
         }
 
@@ -836,6 +879,17 @@ static void chat_task(void *arg)
             (void)memset(command.prompt, 0, sizeof(command.prompt));
             continue;
         }
+        if (command.type == AIQA_CHAT_COMMAND_LOCAL_PET_REPLY) {
+            ESP_LOGI("aiqa_chat", "Playing local pet reply");
+            speak_pet_answer(command.prompt);
+            (void)memset(command.prompt, 0, sizeof(command.prompt));
+            (void)aiqa_runtime_post_event((aiqa_event_t){
+                .type = AIQA_EVENT_CHAT_DONE,
+                .error = AIQA_ERROR_NONE,
+                .value = 0,
+            });
+            continue;
+        }
         if (command.type != AIQA_CHAT_COMMAND_USER_PROMPT) {
             (void)memset(command.prompt, 0, sizeof(command.prompt));
             continue;
@@ -863,18 +917,21 @@ static void chat_task(void *arg)
         const bool use_stream = s_config_snapshot.config.stream &&
                                 chat_caps != NULL &&
                                 chat_caps->supports_chat_stream;
+        const char *response_language = aiqa_language_chat_code(s_dialogue_language);
         esp_err_t chat_ret = use_stream
-                                 ? aiqa_chat_send_streaming(
+                                 ? aiqa_chat_send_streaming_with_language(
                                        &s_config_snapshot.config,
                                        &s_config_snapshot.secrets,
                                        command.prompt,
+                                       response_language,
                                        chat_stream_delta_callback,
                                        &stream_context,
                                        &result)
-                                 : aiqa_chat_send_once(
+                                 : aiqa_chat_send_once_with_language(
                                        &s_config_snapshot.config,
                                        &s_config_snapshot.secrets,
                                        command.prompt,
+                                       response_language,
                                        &result);
         (void)memset(command.prompt, 0, sizeof(command.prompt));
         if (result.status == AIQA_CHAT_OK) {
@@ -896,6 +953,10 @@ static void chat_task(void *arg)
 
 esp_err_t aiqa_runtime_start(void)
 {
+    s_dialogue_language = aiqa_language_default();
+    s_pending_local_pet_reply = false;
+    (void)memset(s_local_pet_reply, 0, sizeof(s_local_pet_reply));
+
     ESP_RETURN_ON_ERROR(init_nvs(), TAG, "NVS init failed");
     ESP_RETURN_ON_ERROR(board_wave_175c_init_minimal(), TAG, "board init failed");
     ESP_RETURN_ON_ERROR(board_wave_175c_run_bringup_checks(), TAG, "bring-up checks failed");

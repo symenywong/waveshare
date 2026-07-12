@@ -5,9 +5,25 @@
 #include <string.h>
 
 static const char *CHAT_COMPLETIONS_PATH = "/chat/completions";
-static const char *PET_SYSTEM_PROMPT =
+static const char *PET_SYSTEM_PROMPT_BASE =
     "You are an AI electronic pet on a tiny round screen. "
-    "Answer warmly, briefly, and use simple ASCII English for the display.";
+    "Answer warmly and briefly. Avoid markdown and long paragraphs.";
+static const char *PET_SYSTEM_PROMPT_ENGLISH =
+    "Reply in English with simple display-safe text.";
+static const char *PET_SYSTEM_PROMPT_CHINESE =
+    "Reply in Simplified Chinese. Keep it concise and friendly.";
+
+static const char *language_prompt_for_code(const char *language_code)
+{
+    if (language_code != NULL &&
+        (strcmp(language_code, "zh") == 0 ||
+         strcmp(language_code, "zh-CN") == 0 ||
+         strcmp(language_code, "chinese") == 0 ||
+         strcmp(language_code, "Chinese") == 0)) {
+        return PET_SYSTEM_PROMPT_CHINESE;
+    }
+    return PET_SYSTEM_PROMPT_ENGLISH;
+}
 
 static aiqa_chat_status_t append_char(char *out, size_t out_size, size_t *pos, char value)
 {
@@ -153,7 +169,16 @@ aiqa_chat_status_t aiqa_chat_build_request_json(
     if (status != AIQA_CHAT_OK) {
         return status;
     }
-    status = append_escaped_json_string(out_json, out_json_size, &pos, PET_SYSTEM_PROMPT);
+    char system_prompt[256];
+    int prompt_written = snprintf(system_prompt,
+                                  sizeof(system_prompt),
+                                  "%s %s",
+                                  PET_SYSTEM_PROMPT_BASE,
+                                  language_prompt_for_code(options->response_language));
+    if (prompt_written < 0 || (size_t)prompt_written >= sizeof(system_prompt)) {
+        return AIQA_CHAT_ERR_BUFFER_TOO_SMALL;
+    }
+    status = append_escaped_json_string(out_json, out_json_size, &pos, system_prompt);
     if (status != AIQA_CHAT_OK) {
         return status;
     }

@@ -49,6 +49,7 @@ typedef struct {
     bool stream;
     bool hide_reasoning;
     int max_completion_tokens;
+    const char *response_language;
 } aiqa_chat_options_t;
 
 typedef struct {

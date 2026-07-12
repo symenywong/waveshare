@@ -141,6 +141,10 @@ Implemented:
 - HTTP/auth/rate-limit/timeout/provider failures mapped back into runtime
   events.
 - Chat prompt queue accepts text derived from the latest ASR transcript.
+- Voice language switch commands are handled locally from ASR transcripts:
+  phrases such as `使用中文与我交流` or `please speak English with me` switch
+  between Chinese and English, play a local confirmation, and pass `zh`/`en`
+  response-language hints into later chat requests.
 - State machine accepts chat start from `IDLE` and `IDLE_WITH_RESULT`.
 - State machine also accepts chat start while already `THINKING`, avoiding a
   race warning when the chat worker begins immediately after ASR completion.

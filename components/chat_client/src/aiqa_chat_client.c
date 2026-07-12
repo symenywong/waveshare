@@ -197,6 +197,7 @@ static esp_err_t chat_send_request(
     const aiqa_config_t *config,
     const aiqa_secret_config_t *secrets,
     const char *prompt,
+    const char *response_language,
     bool stream,
     aiqa_chat_event_cb_t on_delta,
     void *user_ctx,
@@ -231,6 +232,7 @@ static esp_err_t chat_send_request(
         .stream = stream,
         .hide_reasoning = config->hide_reasoning,
         .max_completion_tokens = config->max_completion_tokens,
+        .response_language = response_language,
     };
     char *request_body = (char *)malloc(AIQA_CHAT_REQUEST_MAX_LEN);
     char *response_body = (char *)malloc(AIQA_CHAT_HTTP_RESPONSE_MAX_LEN);
@@ -361,7 +363,17 @@ esp_err_t aiqa_chat_send_once(
     const char *prompt,
     aiqa_chat_result_t *result)
 {
-    return chat_send_request(config, secrets, prompt, false, NULL, NULL, result);
+    return aiqa_chat_send_once_with_language(config, secrets, prompt, NULL, result);
+}
+
+esp_err_t aiqa_chat_send_once_with_language(
+    const aiqa_config_t *config,
+    const aiqa_secret_config_t *secrets,
+    const char *prompt,
+    const char *response_language,
+    aiqa_chat_result_t *result)
+{
+    return chat_send_request(config, secrets, prompt, response_language, false, NULL, NULL, result);
 }
 
 esp_err_t aiqa_chat_send_streaming(
@@ -372,5 +384,24 @@ esp_err_t aiqa_chat_send_streaming(
     void *user_ctx,
     aiqa_chat_result_t *result)
 {
-    return chat_send_request(config, secrets, prompt, true, on_delta, user_ctx, result);
+    return aiqa_chat_send_streaming_with_language(
+        config,
+        secrets,
+        prompt,
+        NULL,
+        on_delta,
+        user_ctx,
+        result);
+}
+
+esp_err_t aiqa_chat_send_streaming_with_language(
+    const aiqa_config_t *config,
+    const aiqa_secret_config_t *secrets,
+    const char *prompt,
+    const char *response_language,
+    aiqa_chat_event_cb_t on_delta,
+    void *user_ctx,
+    aiqa_chat_result_t *result)
+{
+    return chat_send_request(config, secrets, prompt, response_language, true, on_delta, user_ctx, result);
 }
