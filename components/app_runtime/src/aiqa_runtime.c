@@ -1,5 +1,4 @@
 #include "aiqa_runtime.h"
-
 #include "aiqa_config.h"
 #include "aiqa_config_nvs.h"
 #include "aiqa_audio_capture.h"
@@ -19,12 +18,9 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "freertos/projdefs.h"
-
 #include <stdio.h>
 #include <string.h>
-
 static const char *TAG = "aiqa_runtime";
-
 #define AIQA_APP_QUEUE_DEPTH 16
 #define AIQA_UI_QUEUE_DEPTH 8
 #define AIQA_NET_QUEUE_DEPTH 2
@@ -43,42 +39,35 @@ static const char *TAG = "aiqa_runtime";
 typedef struct {
     aiqa_state_t state;
     aiqa_error_code_t error;
+    aiqa_dialogue_view_t dialogue;
 } aiqa_ui_message_t;
-
 typedef enum { AIQA_NET_COMMAND_CONNECT = 0 } aiqa_net_command_type_t;
-
 typedef struct {
     aiqa_net_command_type_t type;
 } aiqa_net_command_t;
-
 typedef enum { AIQA_CHAT_COMMAND_USER_PROMPT = 0 } aiqa_chat_command_type_t;
-
 typedef struct {
     aiqa_chat_command_type_t type;
     char prompt[AIQA_RUNTIME_CHAT_PROMPT_MAX_LEN];
 } aiqa_chat_command_t;
-
 typedef enum {
     AIQA_AUDIO_COMMAND_START_RECORDING = 0,
     AIQA_AUDIO_COMMAND_STOP_RECORDING,
 } aiqa_audio_command_type_t;
-
 typedef struct {
     aiqa_audio_command_type_t type;
     uint32_t max_record_ms;
 } aiqa_audio_command_t;
-
 typedef enum { AIQA_ASR_COMMAND_STATIC_SAMPLE = 0 } aiqa_asr_command_type_t;
-
 typedef struct {
     aiqa_asr_command_type_t type;
     const char *audio_ref;
 } aiqa_asr_command_t;
-
 static QueueHandle_t s_app_queue, s_ui_queue, s_net_queue, s_chat_queue, s_audio_queue, s_asr_queue;
 static aiqa_config_snapshot_t s_config_snapshot;
 static bool s_config_snapshot_ready;
 static char s_latest_transcript[AIQA_ASR_RESPONSE_TEXT_MAX_LEN];
+static aiqa_dialogue_view_t s_latest_dialogue;
 static esp_err_t init_nvs(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -212,6 +201,7 @@ static void post_ui_state(aiqa_state_t state, aiqa_error_code_t error)
     aiqa_ui_message_t message = {
         .state = state,
         .error = error,
+        .dialogue = s_latest_dialogue,
     };
     (void)xQueueSend(s_ui_queue, &message, 0);
 }
@@ -225,6 +215,8 @@ static void handle_recording_transition(aiqa_transition_t transition)
     esp_err_t ret = ESP_OK;
     if (transition.next_state == AIQA_STATE_RECORDING) {
         aiqa_ptt_policy_t policy = aiqa_ptt_default_policy();
+        aiqa_dialogue_view_clear(&s_latest_dialogue);
+        (void)memset(s_latest_transcript, 0, sizeof(s_latest_transcript));
         ret = post_audio_command((aiqa_audio_command_t){
             .type = AIQA_AUDIO_COMMAND_START_RECORDING,
             .max_record_ms = policy.max_record_ms,
@@ -423,7 +415,7 @@ static void ui_task(void *arg)
 
         if (display_ready) {
             const board_wave_175c_display_page_t page =
-                aiqa_runtime_ui_page_for(message.state, message.error);
+                aiqa_runtime_ui_page_for_dialogue(message.state, message.error, &message.dialogue);
             display_ret = board_wave_175c_display_show_page(&page);
             if (display_ret != ESP_OK) {
                 ESP_LOGW("aiqa_ui", "LCD page draw failed: %s", esp_err_to_name(display_ret));
@@ -694,6 +686,7 @@ static void asr_task(void *arg)
             &result);
         if (result.status == AIQA_ASR_OK) {
             (void)snprintf(s_latest_transcript, sizeof(s_latest_transcript), "%s", result.text);
+            aiqa_dialogue_view_set_user(&s_latest_dialogue, result.text);
             ESP_LOGI("aiqa_asr", "ASR transcript ready: %u bytes", (unsigned)strlen(result.text));
         }
 
@@ -742,10 +735,12 @@ static void chat_task(void *arg)
             &result);
         (void)memset(command.prompt, 0, sizeof(command.prompt));
         if (result.status == AIQA_CHAT_OK) {
+            aiqa_dialogue_view_set_pet(&s_latest_dialogue, result.text);
             ESP_LOGI("aiqa_chat", "Chat answer ready: %u bytes", (unsigned)strlen(result.text));
         }
 
         aiqa_event_t event = chat_result_to_event(&result, chat_ret);
+        (void)memset(result.text, 0, sizeof(result.text));
         esp_err_t post_ret = aiqa_runtime_post_event(event);
         if (post_ret != ESP_OK) {
             ESP_LOGE("aiqa_chat", "Failed to post chat result: %s", esp_err_to_name(post_ret));

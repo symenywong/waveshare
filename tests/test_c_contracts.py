@@ -12,13 +12,32 @@ class CContractTests(unittest.TestCase):
     def compile_and_run(self, source: str, extra_sources: list[str], include_dirs: list[str]) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             test_c = Path(tmp) / "contract_test.c"
+            esp_err_h = Path(tmp) / "esp_err.h"
             binary = Path(tmp) / "contract_test"
             test_c.write_text(source, encoding="utf-8")
+            esp_err_h.write_text(
+                textwrap.dedent(
+                    """
+                    #pragma once
+                    typedef int esp_err_t;
+                    #define ESP_OK 0
+                    #define ESP_FAIL -1
+                    #define ESP_ERR_NO_MEM 0x101
+                    #define ESP_ERR_INVALID_ARG 0x102
+                    #define ESP_ERR_INVALID_STATE 0x103
+                    #define ESP_ERR_NOT_FOUND 0x105
+                    #define ESP_ERR_TIMEOUT 0x107
+                    const char *esp_err_to_name(esp_err_t code);
+                    """
+                ),
+                encoding="utf-8",
+            )
             cmd = [
                 "cc",
                 "-std=c11",
                 "-Wall",
                 "-Wextra",
+                f"-I{tmp}",
                 *[f"-I{REPO_ROOT / include_dir}" for include_dir in include_dirs],
                 str(test_c),
                 *[str(REPO_ROOT / source_file) for source_file in extra_sources],
@@ -231,6 +250,87 @@ class CContractTests(unittest.TestCase):
             ),
             ["components/app_core/src/aiqa_hardening.c"],
             ["components/app_core/include"],
+        )
+
+    def test_dialogue_view_contract_keeps_round_screen_lines_short(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_dialogue_view.h"
+                #include "board_wave_175c_display_contract.h"
+                #include <assert.h>
+                #include <string.h>
+
+                int main(void) {
+                    aiqa_dialogue_view_t view;
+                    aiqa_dialogue_view_clear(&view);
+                    aiqa_dialogue_view_set_user(&view, "hello tiny pet, please explain rain");
+                    aiqa_dialogue_view_set_pet(&view, "Rain is cloud water falling back down.");
+                    assert(view.has_dialogue);
+                    assert(strcmp(view.user_line, "YOU HELLO TINY PET") == 0);
+                    assert(strcmp(view.pet_line, "PET RAIN IS CLOUD WATER") == 0);
+
+                    board_wave_175c_display_rect_t rect = {0};
+                    assert(board_wave_175c_display_centered_text_rect(strlen(view.user_line), 2, 372, &rect));
+                    assert(board_wave_175c_display_centered_text_rect(strlen(view.pet_line), 2, 334, &rect));
+
+                    aiqa_dialogue_view_set_user(&view, "今天天气不错");
+                    aiqa_dialogue_view_set_pet(&view, "好的，我听到了");
+                    assert(strcmp(view.user_line, "YOU VOICE RECEIVED") == 0);
+                    assert(strcmp(view.pet_line, "PET ANSWER READY") == 0);
+                    return 0;
+                }
+                """
+            ),
+            [
+                "components/app_core/src/aiqa_dialogue_view.c",
+                "components/board_wave_175c/src/board_wave_175c_display_contract.c",
+            ],
+            [
+                "components/app_core/include",
+                "components/board_wave_175c/include",
+            ],
+        )
+
+    def test_runtime_ui_prefers_dialogue_on_answer_page(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_runtime_ui.h"
+                #include <assert.h>
+                #include <string.h>
+
+                int main(void) {
+                    aiqa_dialogue_view_t dialogue;
+                    aiqa_dialogue_view_clear(&dialogue);
+                    aiqa_dialogue_view_set_user(&dialogue, "hello pet");
+                    aiqa_dialogue_view_set_pet(&dialogue, "happy to help");
+
+                    board_wave_175c_display_page_t page = aiqa_runtime_ui_page_for_dialogue(
+                        AIQA_STATE_IDLE_WITH_RESULT,
+                        AIQA_ERROR_NONE,
+                        &dialogue);
+                    assert(strcmp(page.status, "PET SAYS") == 0);
+                    assert(strcmp(page.detail, "PET HAPPY TO HELP") == 0);
+                    assert(strcmp(page.hint, "YOU HELLO PET") == 0);
+                    assert(!page.is_error);
+
+                    page = aiqa_runtime_ui_page_for_dialogue(AIQA_STATE_THINKING, AIQA_ERROR_NONE, &dialogue);
+                    assert(strcmp(page.status, "THINKING") == 0);
+                    assert(strcmp(page.detail, "ASKING ONLINE MODEL") == 0);
+                    return 0;
+                }
+                """
+            ),
+            [
+                "components/app_runtime/src/aiqa_runtime_ui.c",
+                "components/app_core/src/aiqa_dialogue_view.c",
+            ],
+            [
+                "components/app_runtime/include",
+                "components/app_core/include",
+                "components/board_wave_175c/include",
+            ],
         )
 
     def test_provider_capabilities_for_default_qwen(self):

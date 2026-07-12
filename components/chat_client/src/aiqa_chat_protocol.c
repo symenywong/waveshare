@@ -7,7 +7,7 @@
 static const char *CHAT_COMPLETIONS_PATH = "/chat/completions";
 static const char *PET_SYSTEM_PROMPT =
     "You are an AI electronic pet on a tiny round screen. "
-    "Answer warmly, briefly, and use playful companion language.";
+    "Answer warmly, briefly, and use simple ASCII English for the display.";
 
 static aiqa_chat_status_t append_char(char *out, size_t out_size, size_t *pos, char value)
 {

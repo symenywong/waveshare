@@ -187,11 +187,26 @@ static board_wave_175c_pet_expression_t ui_expression_for(aiqa_state_t state, ai
 
 board_wave_175c_display_page_t aiqa_runtime_ui_page_for(aiqa_state_t state, aiqa_error_code_t error)
 {
+    return aiqa_runtime_ui_page_for_dialogue(state, error, NULL);
+}
+
+board_wave_175c_display_page_t aiqa_runtime_ui_page_for_dialogue(
+    aiqa_state_t state,
+    aiqa_error_code_t error,
+    const aiqa_dialogue_view_t *dialogue)
+{
+    const bool show_dialogue = error == AIQA_ERROR_NONE &&
+                               state == AIQA_STATE_IDLE_WITH_RESULT &&
+                               dialogue != NULL &&
+                               dialogue->has_dialogue &&
+                               dialogue->pet_line[0] != '\0';
     return (board_wave_175c_display_page_t){
         .title = "AI PET",
-        .status = ui_status_for(state, error),
-        .detail = ui_detail_for(state, error),
-        .hint = ui_hint_for(state, error),
+        .status = show_dialogue ? "PET SAYS" : ui_status_for(state, error),
+        .detail = show_dialogue ? dialogue->pet_line : ui_detail_for(state, error),
+        .hint = show_dialogue && dialogue->user_line[0] != '\0'
+                    ? dialogue->user_line
+                    : ui_hint_for(state, error),
         .accent_rgb565 = ui_accent_for(state, error),
         .is_error = error != AIQA_ERROR_NONE && error != AIQA_ERROR_CONFIG_MISSING,
         .expression = ui_expression_for(state, error),
