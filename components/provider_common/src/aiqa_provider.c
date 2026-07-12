@@ -8,9 +8,12 @@ static const aiqa_provider_caps_t DASH_SCOPE_CHAT_CAPS = {
     .supports_reasoning_controls = true,
     .supports_data_uri_audio = false,
     .requires_public_audio_url = false,
+    .supports_tts_stream = false,
     .async_transcription = false,
     .max_audio_bytes = 0,
     .max_audio_seconds = 0,
+    .max_tts_text_bytes = 0,
+    .tts_sample_rate_hz = 0,
 };
 
 static const aiqa_provider_caps_t MINIMAX_CHAT_CAPS = {
@@ -18,9 +21,12 @@ static const aiqa_provider_caps_t MINIMAX_CHAT_CAPS = {
     .supports_reasoning_controls = true,
     .supports_data_uri_audio = false,
     .requires_public_audio_url = false,
+    .supports_tts_stream = false,
     .async_transcription = false,
     .max_audio_bytes = 0,
     .max_audio_seconds = 0,
+    .max_tts_text_bytes = 0,
+    .tts_sample_rate_hz = 0,
 };
 
 static const aiqa_provider_caps_t DASH_SCOPE_ASR_FLASH_CAPS = {
@@ -28,9 +34,25 @@ static const aiqa_provider_caps_t DASH_SCOPE_ASR_FLASH_CAPS = {
     .supports_reasoning_controls = false,
     .supports_data_uri_audio = true,
     .requires_public_audio_url = false,
+    .supports_tts_stream = false,
     .async_transcription = false,
     .max_audio_bytes = 10 * 1024 * 1024,
     .max_audio_seconds = 5 * 60,
+    .max_tts_text_bytes = 0,
+    .tts_sample_rate_hz = 0,
+};
+
+static const aiqa_provider_caps_t DASH_SCOPE_TTS_CAPS = {
+    .supports_chat_stream = false,
+    .supports_reasoning_controls = false,
+    .supports_data_uri_audio = false,
+    .requires_public_audio_url = false,
+    .supports_tts_stream = true,
+    .async_transcription = false,
+    .max_audio_bytes = 0,
+    .max_audio_seconds = 0,
+    .max_tts_text_bytes = 512,
+    .tts_sample_rate_hz = 24000,
 };
 
 const aiqa_provider_caps_t *aiqa_provider_caps_for(const char *provider_id)
@@ -47,6 +69,9 @@ const aiqa_provider_caps_t *aiqa_provider_caps_for(const char *provider_id)
     }
     if (strcmp(provider_id, AIQA_PROVIDER_DASHSCOPE_ASR_FLASH) == 0) {
         return &DASH_SCOPE_ASR_FLASH_CAPS;
+    }
+    if (strcmp(provider_id, AIQA_PROVIDER_DASHSCOPE_TTS) == 0) {
+        return &DASH_SCOPE_TTS_CAPS;
     }
 
     return NULL;
@@ -98,7 +123,8 @@ bool aiqa_provider_host_allowed(const char *provider_id, const char *host)
     }
 
     if (strcmp(provider_id, AIQA_PROVIDER_DASHSCOPE_CHAT) == 0 ||
-        strcmp(provider_id, AIQA_PROVIDER_DASHSCOPE_ASR_FLASH) == 0) {
+        strcmp(provider_id, AIQA_PROVIDER_DASHSCOPE_ASR_FLASH) == 0 ||
+        strcmp(provider_id, AIQA_PROVIDER_DASHSCOPE_TTS) == 0) {
         return matches_any(host, dashscope_hosts, sizeof(dashscope_hosts) / sizeof(dashscope_hosts[0])) ||
                ends_with(host, ".maas.aliyuncs.com");
     }
@@ -123,6 +149,9 @@ bool aiqa_provider_model_allowed(const char *provider_id, const char *model)
     static const char *const dashscope_asr_models[] = {
         AIQA_DEFAULT_QWEN_ASR_MODEL,
     };
+    static const char *const dashscope_tts_models[] = {
+        AIQA_DEFAULT_QWEN_TTS_MODEL,
+    };
 
     if (provider_id == NULL || model == NULL) {
         return false;
@@ -139,6 +168,10 @@ bool aiqa_provider_model_allowed(const char *provider_id, const char *model)
     if (strcmp(provider_id, AIQA_PROVIDER_DASHSCOPE_ASR_FLASH) == 0) {
         return matches_any(model, dashscope_asr_models,
                            sizeof(dashscope_asr_models) / sizeof(dashscope_asr_models[0]));
+    }
+    if (strcmp(provider_id, AIQA_PROVIDER_DASHSCOPE_TTS) == 0) {
+        return matches_any(model, dashscope_tts_models,
+                           sizeof(dashscope_tts_models) / sizeof(dashscope_tts_models[0]));
     }
 
     return false;

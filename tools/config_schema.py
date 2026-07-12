@@ -79,6 +79,27 @@ class ProviderCatalog:
                         "max_audio_seconds": 5 * 60,
                     },
                 ),
+                "dashscope_qwen_tts": ProviderDefinition(
+                    provider_id="dashscope_qwen_tts",
+                    allowed_hosts=(
+                        "dashscope.aliyuncs.com",
+                        "dashscope-intl.aliyuncs.com",
+                        "dashscope-us.aliyuncs.com",
+                        "cn-hongkong.dashscope.aliyuncs.com",
+                    ),
+                    allowed_models=("qwen-tts",),
+                    allow_maas_workspace_hosts=True,
+                    capabilities={
+                        "supports_chat_stream": False,
+                        "supports_reasoning_controls": False,
+                        "supports_data_uri_audio": False,
+                        "requires_public_audio_url": False,
+                        "async_transcription": False,
+                        "supports_tts_stream": True,
+                        "max_tts_text_bytes": 512,
+                        "tts_sample_rate_hz": 24000,
+                    },
+                ),
             }
         )
 
@@ -163,6 +184,8 @@ def validate_wifi_config(ssid: str, password: str) -> Dict[str, str]:
 def build_nvs_rows(
     validated_chat_provider: Mapping[str, Any],
     validated_asr_provider: Mapping[str, Any],
+    validated_tts_provider: Mapping[str, Any],
+    tts_voice: str,
     api_key: str,
     wifi_config: Mapping[str, str],
 ) -> list[list[str]]:
@@ -176,6 +199,10 @@ def build_nvs_rows(
         ["asr_provider", "data", "string", str(validated_asr_provider["provider"])],
         ["asr_model", "data", "string", str(validated_asr_provider["model"])],
         ["asr_base_url", "data", "string", str(validated_asr_provider["base_url"])],
+        ["tts_provider", "data", "string", str(validated_tts_provider["provider"])],
+        ["tts_model", "data", "string", str(validated_tts_provider["model"])],
+        ["tts_base_url", "data", "string", str(validated_tts_provider["base_url"])],
+        ["tts_voice", "data", "string", tts_voice],
         ["stream", "data", "u8", "1"],
         ["hide_reason", "data", "u8", "1"],
         ["max_tokens", "data", "i32", "768"],

@@ -11,8 +11,11 @@ extern "C" {
 #define AIQA_PROVIDER_DASHSCOPE_CHAT "dashscope_openai_chat"
 #define AIQA_PROVIDER_MINIMAX_CHAT "minimax_openai_chat"
 #define AIQA_PROVIDER_DASHSCOPE_ASR_FLASH "dashscope_qwen_asr_flash"
+#define AIQA_PROVIDER_DASHSCOPE_TTS "dashscope_qwen_tts"
 #define AIQA_DEFAULT_QWEN_MODEL "qwen3.7-max"
 #define AIQA_DEFAULT_QWEN_ASR_MODEL "qwen3-asr-flash"
+#define AIQA_DEFAULT_QWEN_TTS_MODEL "qwen-tts"
+#define AIQA_DEFAULT_QWEN_TTS_VOICE "Cherry"
 #define AIQA_DEFAULT_MINIMAX_MODEL "MiniMax-M3"
 
 typedef enum {
@@ -26,9 +29,12 @@ typedef struct {
     bool supports_reasoning_controls;
     bool supports_data_uri_audio;
     bool requires_public_audio_url;
+    bool supports_tts_stream;
     bool async_transcription;
     size_t max_audio_bytes;
     uint32_t max_audio_seconds;
+    size_t max_tts_text_bytes;
+    uint32_t tts_sample_rate_hz;
 } aiqa_provider_caps_t;
 
 typedef struct {

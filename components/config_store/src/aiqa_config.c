@@ -76,6 +76,11 @@ aiqa_config_t aiqa_config_default(void)
     (void)snprintf(config.asr_model, sizeof(config.asr_model), "%s", AIQA_DEFAULT_QWEN_ASR_MODEL);
     (void)snprintf(config.asr_base_url, sizeof(config.asr_base_url), "%s",
                    "https://dashscope.aliyuncs.com/compatible-mode/v1");
+    (void)snprintf(config.tts_provider, sizeof(config.tts_provider), "%s", AIQA_PROVIDER_DASHSCOPE_TTS);
+    (void)snprintf(config.tts_model, sizeof(config.tts_model), "%s", AIQA_DEFAULT_QWEN_TTS_MODEL);
+    (void)snprintf(config.tts_base_url, sizeof(config.tts_base_url), "%s",
+                   "https://dashscope.aliyuncs.com/compatible-mode/v1");
+    (void)snprintf(config.tts_voice, sizeof(config.tts_voice), "%s", AIQA_DEFAULT_QWEN_TTS_VOICE);
     return config;
 }
 
@@ -84,7 +89,8 @@ static aiqa_config_status_t validate_provider_endpoint(
     const char *model,
     const char *base_url,
     bool require_chat,
-    bool require_audio)
+    bool require_audio,
+    bool require_tts)
 {
     const aiqa_provider_caps_t *caps = aiqa_provider_caps_for(provider);
     if (caps == NULL) {
@@ -92,7 +98,8 @@ static aiqa_config_status_t validate_provider_endpoint(
     }
     if ((require_chat && !caps->supports_chat_stream) ||
         (require_audio && caps->max_audio_bytes == 0 && !caps->supports_data_uri_audio &&
-         !caps->requires_public_audio_url)) {
+         !caps->requires_public_audio_url) ||
+        (require_tts && !caps->supports_tts_stream)) {
         return AIQA_CONFIG_ERR_PROVIDER;
     }
     if (model == NULL || model[0] == '\0' || has_space(model)) {
@@ -121,15 +128,34 @@ aiqa_config_status_t aiqa_config_validate(const aiqa_config_t *config)
         config->model,
         config->base_url,
         true,
+        false,
         false);
     if (status != AIQA_CONFIG_OK) {
         return status;
     }
 
-    return validate_provider_endpoint(
+    status = validate_provider_endpoint(
         config->asr_provider,
         config->asr_model,
         config->asr_base_url,
+        false,
+        true,
+        false);
+    if (status != AIQA_CONFIG_OK) {
+        return status;
+    }
+
+    if (config->tts_voice[0] == '\0' ||
+        bounded_strlen(config->tts_voice, sizeof(config->tts_voice)) >= sizeof(config->tts_voice) ||
+        has_space(config->tts_voice)) {
+        return AIQA_CONFIG_ERR_MODEL;
+    }
+
+    return validate_provider_endpoint(
+        config->tts_provider,
+        config->tts_model,
+        config->tts_base_url,
+        false,
         false,
         true);
 }

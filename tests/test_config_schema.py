@@ -44,6 +44,21 @@ class ConfigSchemaTests(unittest.TestCase):
         self.assertEqual(config["model"], "qwen3.7-max")
         self.assertTrue(config["capabilities"]["supports_chat_stream"])
 
+    def test_accepts_dashscope_qwen_tts_configuration(self):
+        catalog = ProviderCatalog.default()
+        config = validate_provider_config(
+            catalog,
+            {
+                "provider": "dashscope_qwen_tts",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "model": "qwen-tts",
+                "api_key": "sk-test",
+            },
+        )
+
+        self.assertEqual(config["provider"], "dashscope_qwen_tts")
+        self.assertTrue(config["capabilities"]["supports_tts_stream"])
+
     def test_rejects_display_name_for_qwen_model(self):
         catalog = ProviderCatalog.default()
 

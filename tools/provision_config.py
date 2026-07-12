@@ -41,6 +41,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--asr-provider", default="dashscope_qwen_asr_flash")
     parser.add_argument("--asr-base-url", default="https://dashscope.aliyuncs.com/compatible-mode/v1")
     parser.add_argument("--asr-model", default="qwen3-asr-flash")
+    parser.add_argument("--tts-provider", default="dashscope_qwen_tts")
+    parser.add_argument("--tts-base-url", default="https://dashscope.aliyuncs.com/compatible-mode/v1")
+    parser.add_argument("--tts-model", default="qwen-tts")
+    parser.add_argument("--tts-voice", default="Cherry")
     parser.add_argument("--key-env", default="AIQA_API_KEY")
     parser.add_argument("--wifi-ssid", default="")
     parser.add_argument("--wifi-password", default="")
@@ -95,6 +99,17 @@ def main(argv: list[str] | None = None) -> int:
                 "api_key": api_key,
             },
         )
+        validated_tts = validate_provider_config(
+            catalog,
+            {
+                "provider": args.tts_provider,
+                "base_url": args.tts_base_url,
+                "model": args.tts_model,
+                "api_key": api_key,
+            },
+        )
+        if not args.tts_voice or any(char.isspace() for char in args.tts_voice) or len(args.tts_voice.encode("utf-8")) >= 32:
+            raise ConfigValidationError("tts_voice must be a compact voice ID that fits device storage")
         wifi_config = None
         if args.nvs_csv is not None:
             if not args.allow_plaintext_nvs:
@@ -118,6 +133,13 @@ def main(argv: list[str] | None = None) -> int:
             "model": validated_asr["model"],
             "capabilities": validated_asr["capabilities"],
         },
+        "tts": {
+            "provider": validated_tts["provider"],
+            "base_url": validated_tts["base_url"],
+            "model": validated_tts["model"],
+            "voice": args.tts_voice,
+            "capabilities": validated_tts["capabilities"],
+        },
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
 
@@ -128,7 +150,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.nvs_csv is not None and not args.dry_run:
         assert wifi_config is not None
         try:
-            write_nvs_csv(args.nvs_csv, build_nvs_rows(validated, validated_asr, api_key, wifi_config))
+            write_nvs_csv(
+                args.nvs_csv,
+                build_nvs_rows(validated, validated_asr, validated_tts, args.tts_voice, api_key, wifi_config),
+            )
         except ConfigValidationError as exc:
             print(f"Invalid configuration: {exc}", file=sys.stderr)
             return 1

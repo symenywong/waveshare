@@ -14,6 +14,7 @@ extern "C" {
 #define AIQA_MAX_WIFI_SSID_LEN 33
 #define AIQA_MAX_WIFI_PASSWORD_LEN 65
 #define AIQA_MAX_API_KEY_LEN 192
+#define AIQA_MAX_TTS_VOICE_LEN 32
 
 typedef struct {
     int config_version;
@@ -23,6 +24,10 @@ typedef struct {
     char asr_provider[AIQA_MAX_PROVIDER_ID_LEN];
     char asr_model[AIQA_MAX_MODEL_LEN];
     char asr_base_url[AIQA_MAX_BASE_URL_LEN];
+    char tts_provider[AIQA_MAX_PROVIDER_ID_LEN];
+    char tts_model[AIQA_MAX_MODEL_LEN];
+    char tts_base_url[AIQA_MAX_BASE_URL_LEN];
+    char tts_voice[AIQA_MAX_TTS_VOICE_LEN];
     bool stream;
     bool hide_reasoning;
     int max_completion_tokens;

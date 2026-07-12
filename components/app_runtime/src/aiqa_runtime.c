@@ -3,6 +3,8 @@
 #include "aiqa_config_nvs.h"
 #include "aiqa_audio_capture.h"
 #include "aiqa_audio_capture_hw.h"
+#include "aiqa_audio_playback.h"
+#include "aiqa_audio_playback_hw.h"
 #include "aiqa_asr_client.h"
 #include "aiqa_chat_client.h"
 #include "aiqa_net_connect.h"
@@ -12,6 +14,7 @@
 #include "aiqa_runtime_recording.h"
 #include "aiqa_runtime_ui.h"
 #include "aiqa_state_machine.h"
+#include "aiqa_tts_client.h"
 #include "board_wave_175c.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -33,7 +36,7 @@ static const char *TAG = "aiqa_runtime";
 #define AIQA_TASK_STACK_UI 6144
 #define AIQA_TASK_STACK_AUDIO 6144
 #define AIQA_TASK_STACK_NET 6144
-#define AIQA_TASK_STACK_CHAT 8192
+#define AIQA_TASK_STACK_CHAT 12288
 #define AIQA_TASK_STACK_ASR 8192
 #define AIQA_TASK_STACK_BUTTON 3072
 #define AIQA_RUNTIME_CHAT_PROMPT_MAX_LEN AIQA_ASR_RESPONSE_TEXT_MAX_LEN
@@ -54,6 +57,11 @@ typedef struct {
 typedef struct {
     char answer[AIQA_CHAT_RESPONSE_TEXT_MAX_LEN];
 } aiqa_chat_stream_ui_context_t;
+typedef struct {
+    esp_err_t write_status;
+    size_t audio_bytes;
+    size_t audio_chunks;
+} aiqa_tts_playback_context_t;
 typedef enum {
     AIQA_AUDIO_COMMAND_START_RECORDING = 0,
     AIQA_AUDIO_COMMAND_STOP_RECORDING,
@@ -684,6 +692,71 @@ static void chat_stream_delta_callback(const char *delta, void *user_ctx)
     });
 }
 
+static void tts_playback_audio_callback(const uint8_t *pcm, size_t pcm_bytes, void *user_ctx)
+{
+    aiqa_tts_playback_context_t *context = (aiqa_tts_playback_context_t *)user_ctx;
+    if (context == NULL || context->write_status != ESP_OK || pcm == NULL || pcm_bytes == 0) {
+        return;
+    }
+
+    esp_err_t ret = aiqa_audio_playback_hw_write_pcm(pcm, pcm_bytes);
+    if (ret != ESP_OK) {
+        context->write_status = ret;
+        return;
+    }
+    context->audio_bytes += pcm_bytes;
+    context->audio_chunks += 1;
+}
+
+static void speak_pet_answer(const char *answer)
+{
+    if (answer == NULL || answer[0] == '\0') {
+        return;
+    }
+
+    aiqa_audio_playback_config_t playback_config = aiqa_audio_playback_default_config();
+    esp_err_t playback_ret = aiqa_audio_playback_hw_init(&playback_config);
+    if (playback_ret == ESP_OK) {
+        playback_ret = aiqa_audio_playback_hw_start();
+    }
+    if (playback_ret != ESP_OK) {
+        ESP_LOGW("aiqa_tts", "Playback path unavailable: %s", esp_err_to_name(playback_ret));
+        (void)aiqa_audio_playback_hw_stop();
+        return;
+    }
+
+    aiqa_tts_playback_context_t playback_context = {
+        .write_status = ESP_OK,
+        .audio_bytes = 0,
+        .audio_chunks = 0,
+    };
+    aiqa_tts_result_t tts_result = {0};
+    esp_err_t tts_ret = aiqa_tts_speak_streaming(
+        &s_config_snapshot.config,
+        &s_config_snapshot.secrets,
+        answer,
+        tts_playback_audio_callback,
+        &playback_context,
+        &tts_result);
+    esp_err_t stop_ret = aiqa_audio_playback_hw_stop();
+
+    if (tts_ret == ESP_OK && tts_result.status == AIQA_TTS_OK &&
+        playback_context.write_status == ESP_OK) {
+        ESP_LOGI("aiqa_tts", "Pet reply playback complete: chunks=%u bytes=%u",
+                 (unsigned)playback_context.audio_chunks,
+                 (unsigned)playback_context.audio_bytes);
+        return;
+    }
+
+    ESP_LOGW("aiqa_tts", "Pet reply playback skipped/failed: transport=%s tts=%s http=%d audio_bytes=%u write=%s stop=%s",
+             esp_err_to_name(tts_ret),
+             aiqa_tts_status_name(tts_result.status),
+             tts_result.http_status,
+             (unsigned)tts_result.audio_bytes,
+             esp_err_to_name(playback_context.write_status),
+             esp_err_to_name(stop_ret));
+}
+
 static void chat_task(void *arg)
 {
     (void)arg;
@@ -739,11 +812,14 @@ static void chat_task(void *arg)
         }
 
         aiqa_event_t event = aiqa_runtime_chat_result_to_event(&result, chat_ret);
-        (void)memset(result.text, 0, sizeof(result.text));
         esp_err_t post_ret = aiqa_runtime_post_event(event);
         if (post_ret != ESP_OK) {
             ESP_LOGE("aiqa_chat", "Failed to post chat result: %s", esp_err_to_name(post_ret));
         }
+        if (result.status == AIQA_CHAT_OK) {
+            speak_pet_answer(result.text);
+        }
+        (void)memset(result.text, 0, sizeof(result.text));
     }
 }
 

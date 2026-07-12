@@ -104,6 +104,22 @@ esp_err_t aiqa_config_load_from_nvs(aiqa_config_snapshot_t *snapshot)
                                    sizeof(snapshot->config.asr_base_url));
     }
     if (ret == ESP_OK) {
+        ret = read_optional_string(handle, "tts_provider", snapshot->config.tts_provider,
+                                   sizeof(snapshot->config.tts_provider));
+    }
+    if (ret == ESP_OK) {
+        ret = read_optional_string(handle, "tts_model", snapshot->config.tts_model,
+                                   sizeof(snapshot->config.tts_model));
+    }
+    if (ret == ESP_OK) {
+        ret = read_optional_string(handle, "tts_base_url", snapshot->config.tts_base_url,
+                                   sizeof(snapshot->config.tts_base_url));
+    }
+    if (ret == ESP_OK) {
+        ret = read_optional_string(handle, "tts_voice", snapshot->config.tts_voice,
+                                   sizeof(snapshot->config.tts_voice));
+    }
+    if (ret == ESP_OK) {
         ret = read_optional_u8(handle, "stream", &snapshot->config.stream);
     }
     if (ret == ESP_OK) {

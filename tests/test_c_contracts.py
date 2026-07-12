@@ -645,6 +645,76 @@ class CContractTests(unittest.TestCase):
             ],
         )
 
+    def test_tts_protocol_builds_streaming_qwen_pcm_request_and_parses_audio_delta(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_tts_protocol.h"
+                #include "aiqa_config.h"
+                #include <assert.h>
+                #include <string.h>
+
+                int main(void) {
+                    aiqa_config_t config = aiqa_config_default();
+                    aiqa_tts_options_t options = {
+                        .voice = config.tts_voice,
+                        .format = "pcm",
+                        .sample_rate_hz = 24000,
+                        .stream = true,
+                    };
+
+                    char url[AIQA_TTS_ENDPOINT_MAX_LEN] = {0};
+                    aiqa_tts_status_t status = aiqa_tts_build_endpoint_url(
+                        config.tts_base_url,
+                        url,
+                        sizeof(url));
+                    assert(status == AIQA_TTS_OK);
+                    assert(strcmp(url, "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions") == 0);
+
+                    char body[AIQA_TTS_REQUEST_MAX_LEN] = {0};
+                    status = aiqa_tts_build_request_json(
+                        &config,
+                        &options,
+                        "PET HAPPY TO HELP",
+                        body,
+                        sizeof(body));
+                    assert(status == AIQA_TTS_OK);
+                    assert(strstr(body, "\\"model\\":\\"qwen-tts\\"") != 0);
+                    assert(strstr(body, "\\"stream\\":true") != 0);
+                    assert(strstr(body, "\\"modalities\\":[\\"audio\\"]") != 0);
+                    assert(strstr(body, "\\"voice\\":\\"Cherry\\"") != 0);
+                    assert(strstr(body, "\\"format\\":\\"pcm\\"") != 0);
+                    assert(strstr(body, "PET HAPPY TO HELP") != 0);
+                    assert(strstr(body, "sk-") == 0);
+
+                    char audio_b64[64] = {0};
+                    status = aiqa_tts_parse_stream_audio_data(
+                        "data: {\\"choices\\":[{\\"delta\\":{\\"audio\\":{\\"data\\":\\"QUJDRA==\\"}}}]}\\n\\n",
+                        audio_b64,
+                        sizeof(audio_b64));
+                    assert(status == AIQA_TTS_OK);
+                    assert(strcmp(audio_b64, "QUJDRA==") == 0);
+
+                    audio_b64[0] = '\\0';
+                    status = aiqa_tts_parse_stream_audio_data("data: [DONE]\\n\\n", audio_b64, sizeof(audio_b64));
+                    assert(status == AIQA_TTS_ERR_PARSE);
+                    assert(audio_b64[0] == '\\0');
+                    return 0;
+                }
+                """
+            ),
+            [
+                "components/tts_client/src/aiqa_tts_protocol.c",
+                "components/config_store/src/aiqa_config.c",
+                "components/provider_common/src/aiqa_provider.c",
+            ],
+            [
+                "components/tts_client/include",
+                "components/config_store/include",
+                "components/provider_common/include",
+            ],
+        )
+
     def test_asr_protocol_builds_static_sample_request_without_leaking_secret(self):
         self.compile_and_run(
             textwrap.dedent(
@@ -946,6 +1016,44 @@ class CContractTests(unittest.TestCase):
                 """
             ),
             ["components/audio_capture/src/aiqa_audio_capture.c"],
+            ["components/audio_capture/include"],
+        )
+
+    def test_audio_playback_budget_contract(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_audio_playback.h"
+                #include <assert.h>
+
+                int main(void) {
+                    aiqa_audio_playback_config_t config = aiqa_audio_playback_default_config();
+                    assert(config.sample_rate_hz == 24000);
+                    assert(config.bits_per_sample == 16);
+                    assert(config.channels == 1);
+                    assert(config.volume_percent <= 70);
+                    assert(config.chunk_bytes == 1024);
+                    assert(aiqa_audio_playback_config_is_safe(&config));
+
+                    config.sample_rate_hz = 44100;
+                    assert(!aiqa_audio_playback_config_is_safe(&config));
+
+                    config = aiqa_audio_playback_default_config();
+                    config.bits_per_sample = 24;
+                    assert(!aiqa_audio_playback_config_is_safe(&config));
+
+                    config = aiqa_audio_playback_default_config();
+                    config.volume_percent = 95;
+                    assert(!aiqa_audio_playback_config_is_safe(&config));
+
+                    config = aiqa_audio_playback_default_config();
+                    config.chunk_bytes = 0;
+                    assert(!aiqa_audio_playback_config_is_safe(&config));
+                    return 0;
+                }
+                """
+            ),
+            ["components/audio_capture/src/aiqa_audio_playback.c"],
             ["components/audio_capture/include"],
         )
 
