@@ -17,6 +17,11 @@
 
 static const char *TAG = "aiqa_playback";
 
+#define AIQA_AUDIO_TEST_TONE_MIN_HZ 100u
+#define AIQA_AUDIO_TEST_TONE_MAX_HZ 4000u
+#define AIQA_AUDIO_TEST_TONE_MAX_MS 2000u
+#define AIQA_AUDIO_TEST_TONE_AMPLITUDE 16000
+
 static esp_codec_dev_handle_t s_codec;
 static aiqa_audio_playback_config_t s_config;
 static bool s_started;
@@ -58,7 +63,10 @@ static esp_err_t init_codec(const aiqa_audio_playback_config_t *config)
         .pa_reverted = false,
         .master_mode = false,
         .use_mclk = true,
-        .mclk_div = I2S_MCLK_MULTIPLE_256,
+        .hw_gain = {
+            .pa_voltage = 5.0f,
+            .codec_dac_voltage = 3.3f,
+        },
     };
     const audio_codec_if_t *codec_if = es8311_codec_new(&es8311_config);
     ESP_RETURN_ON_FALSE(codec_if != NULL, ESP_ERR_NO_MEM, TAG, "ES8311 codec create failed");
@@ -106,7 +114,7 @@ esp_err_t aiqa_audio_playback_hw_start(void)
         .bits_per_sample = s_config.bits_per_sample,
         .channel = s_config.channels,
         .sample_rate = s_config.sample_rate_hz,
-        .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+        .mclk_multiple = 0,
     };
     ESP_RETURN_ON_ERROR(codec_status_to_esp(esp_codec_dev_open(s_codec, &sample_config)),
                         TAG,
@@ -140,6 +148,61 @@ esp_err_t aiqa_audio_playback_hw_stop(void)
     s_started = false;
     (void)board_wave_175c_set_pa_enabled(false);
     return codec_status_to_esp(esp_codec_dev_close(s_codec));
+}
+
+esp_err_t aiqa_audio_playback_hw_play_test_tone(uint32_t frequency_hz, uint32_t duration_ms)
+{
+    if (frequency_hz < AIQA_AUDIO_TEST_TONE_MIN_HZ ||
+        frequency_hz > AIQA_AUDIO_TEST_TONE_MAX_HZ ||
+        duration_ms == 0 ||
+        duration_ms > AIQA_AUDIO_TEST_TONE_MAX_MS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    aiqa_audio_playback_config_t config = aiqa_audio_playback_default_config();
+    ESP_RETURN_ON_ERROR(aiqa_audio_playback_hw_init(&config), TAG, "test tone playback init failed");
+    esp_err_t start_ret = aiqa_audio_playback_hw_start();
+    if (start_ret != ESP_OK) {
+        (void)aiqa_audio_playback_hw_stop();
+        return start_ret;
+    }
+
+    int16_t samples[AIQA_AUDIO_PLAYBACK_CHUNK_BYTES / sizeof(int16_t)] = {0};
+    const size_t sample_capacity = sizeof(samples) / sizeof(samples[0]);
+    const size_t total_samples = ((size_t)config.sample_rate_hz * (size_t)duration_ms) / 1000u;
+    const uint32_t phase_step = (uint32_t)(((uint64_t)frequency_hz << 32) / config.sample_rate_hz);
+    uint32_t phase = 0;
+    size_t samples_written = 0;
+    esp_err_t write_ret = ESP_OK;
+
+    while (samples_written < total_samples) {
+        size_t chunk_samples = total_samples - samples_written;
+        if (chunk_samples > sample_capacity) {
+            chunk_samples = sample_capacity;
+        }
+        for (size_t i = 0; i < chunk_samples; ++i) {
+            samples[i] = (phase & 0x80000000u) ? AIQA_AUDIO_TEST_TONE_AMPLITUDE : -AIQA_AUDIO_TEST_TONE_AMPLITUDE;
+            phase += phase_step;
+        }
+        write_ret = aiqa_audio_playback_hw_write_pcm((const uint8_t *)samples,
+                                                     chunk_samples * sizeof(samples[0]));
+        if (write_ret != ESP_OK) {
+            break;
+        }
+        samples_written += chunk_samples;
+    }
+
+    esp_err_t stop_ret = aiqa_audio_playback_hw_stop();
+    if (write_ret != ESP_OK) {
+        return write_ret;
+    }
+    ESP_RETURN_ON_ERROR(stop_ret, TAG, "test tone playback stop failed");
+    ESP_LOGI(TAG,
+             "Playback test tone complete: %lu Hz, %lu ms, %u bytes",
+             (unsigned long)frequency_hz,
+             (unsigned long)duration_ms,
+             (unsigned)(samples_written * sizeof(samples[0])));
+    return ESP_OK;
 }
 
 bool aiqa_audio_playback_hw_is_ready(void)

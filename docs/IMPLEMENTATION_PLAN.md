@@ -182,6 +182,7 @@ Implemented:
 - PSRAM-backed PCM recording buffer for 24 kHz/16-bit/mono audio.
 - Runtime PCM diagnostics: captured bytes, mono sample count, PCM bytes, and peak level.
 - Recorded PCM handoff to ASR as a WAV data URI after PTT release.
+- Startup ES8311+PA playback self-test tone after Wi-Fi reaches `IDLE`.
 - Host contract tests cover short-press rejection, long-press start, release
   stop, and one-shot timeout behavior.
 

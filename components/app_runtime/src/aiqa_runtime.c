@@ -40,6 +40,8 @@ static const char *TAG = "aiqa_runtime";
 #define AIQA_TASK_STACK_ASR 8192
 #define AIQA_TASK_STACK_BUTTON 3072
 #define AIQA_RUNTIME_CHAT_PROMPT_MAX_LEN AIQA_ASR_RESPONSE_TEXT_MAX_LEN
+#define AIQA_STARTUP_AUDIO_TEST_TONE_HZ 880u
+#define AIQA_STARTUP_AUDIO_TEST_TONE_MS 900u
 typedef struct {
     aiqa_state_t state;
     aiqa_error_code_t error;
@@ -86,6 +88,7 @@ typedef struct {
 static QueueHandle_t s_app_queue, s_ui_queue, s_net_queue, s_chat_queue, s_audio_queue, s_asr_queue;
 static aiqa_config_snapshot_t s_config_snapshot;
 static bool s_config_snapshot_ready;
+static bool s_startup_audio_test_done;
 static char s_latest_transcript[AIQA_ASR_RESPONSE_TEXT_MAX_LEN];
 static aiqa_dialogue_view_t s_latest_dialogue;
 static aiqa_runtime_recording_t s_recording;
@@ -220,6 +223,25 @@ static void post_ui_state(aiqa_state_t state, aiqa_error_code_t error)
     (void)xQueueSend(s_ui_queue, &message, 0);
 }
 
+static void maybe_run_startup_audio_test(aiqa_transition_t transition)
+{
+    if (s_startup_audio_test_done ||
+        transition.previous_state != AIQA_STATE_NETWORK_CONNECTING ||
+        transition.next_state != AIQA_STATE_IDLE) {
+        return;
+    }
+    s_startup_audio_test_done = true;
+    ESP_LOGI("aiqa_audio", "Running ES8311+PA startup playback self-test");
+    esp_err_t ret = aiqa_audio_playback_hw_play_test_tone(
+        AIQA_STARTUP_AUDIO_TEST_TONE_HZ,
+        AIQA_STARTUP_AUDIO_TEST_TONE_MS);
+    if (ret != ESP_OK) {
+        ESP_LOGW("aiqa_audio", "Startup playback self-test failed: %s", esp_err_to_name(ret));
+        return;
+    }
+    ESP_LOGI("aiqa_audio", "Startup playback self-test finished");
+}
+
 static void handle_recording_transition(aiqa_transition_t transition)
 {
     if (!transition.accepted || !transition.changed) {
@@ -322,6 +344,7 @@ static void app_state_task(void *arg)
             post_ui_state(transition.next_state, transition.error);
             handle_recording_transition(transition);
             handle_chat_prompt_transition(transition, event);
+            maybe_run_startup_audio_test(transition);
         } else if (event.type == AIQA_EVENT_CHAT_TOKEN) {
             post_ui_state(transition.next_state, transition.error);
         }

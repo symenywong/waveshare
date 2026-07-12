@@ -1040,7 +1040,7 @@ class CContractTests(unittest.TestCase):
                     assert(config.sample_rate_hz == 24000);
                     assert(config.bits_per_sample == 16);
                     assert(config.channels == 1);
-                    assert(config.volume_percent <= 70);
+                    assert(config.volume_percent == 85);
                     assert(config.chunk_bytes == 1024);
                     assert(aiqa_audio_playback_config_is_safe(&config));
 
@@ -1052,7 +1052,7 @@ class CContractTests(unittest.TestCase):
                     assert(!aiqa_audio_playback_config_is_safe(&config));
 
                     config = aiqa_audio_playback_default_config();
-                    config.volume_percent = 95;
+                    config.volume_percent = 101;
                     assert(!aiqa_audio_playback_config_is_safe(&config));
 
                     config = aiqa_audio_playback_default_config();

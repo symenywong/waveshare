@@ -119,7 +119,7 @@ esp_err_t aiqa_audio_capture_hw_start(void)
         .channel = s_config.source_channels,
         .channel_mask = ES7210_SEL_MIC1 | ES7210_SEL_MIC2 | ES7210_SEL_MIC3 | ES7210_SEL_MIC4,
         .sample_rate = s_config.sample_rate_hz,
-        .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+        .mclk_multiple = 0,
     };
     ESP_RETURN_ON_ERROR(codec_status_to_esp(esp_codec_dev_open(s_codec, &sample_config)),
                         TAG,
