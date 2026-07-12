@@ -17,7 +17,7 @@ Other tasks send events or receive commands through queues.
 2. Hardware bring-up: I2C scan, PMU, BOOT/PWR behavior, AMOLED init, ES7210, ES8311/PA.
 3. Secure provisioning: NVS schema, key redaction, factory reset, cert bundle, SNTP.
 4. Fixed-text Qwen call using `dashscope_openai_chat` and `qwen3.7-max`.
-5. Bounded push-to-talk recording with 16 kHz/16-bit mono extraction.
+5. Bounded push-to-talk recording with 24 kHz/16-bit mono extraction.
 6. ASR provider selection and recorded WAV data URI transcription.
 7. End-to-end PTT: recording -> ASR -> chat answer -> pet response screen.
 8. MiniMax chat adapter and provider capability table.
@@ -27,10 +27,10 @@ Other tasks send events or receive commands through queues.
 
 - AMOLED: 466x466
 - LCD SDIO0..3: GPIO 4/5/6/7
-- LCD SCLK/CS/RESET: GPIO 38/12/39
+- LCD SCLK/CS/RESET: GPIO 38/12/1
 - I2C SDA/SCL: GPIO 15/14
-- Touch INT/RST: GPIO 11/40
-- ES7210 BCLK/LRCK/DIN/MCLK: GPIO 9/45/10/42
+- Touch INT/RST: GPIO 11/2
+- ES7210 BCLK/LRCK/DIN/MCLK: GPIO 9/45/10/16
 - ES8311 DOUT: GPIO 8
 - PA: GPIO 46
 
@@ -53,11 +53,11 @@ Implemented:
   - CST9217 `0x5A`
   - QMI8658 `0x6B`
 - Define safe audio capture budget:
-  - 16 kHz
+  - 24 kHz
   - 16-bit
   - mono
   - 20 second maximum
-  - 640 KB maximum PCM buffer
+  - 960 KB maximum PCM buffer
 - Initialize the CO5300 AMOLED over QSPI and render the current runtime state.
 - Render the first AI pet status surface:
   - circular-safe centered text
@@ -179,7 +179,7 @@ Implemented:
 - `audio_task` owns recording start/stop commands and logs the capture session
   lifecycle.
 - ES7210 capture bring-up using `esp_codec_dev` and ESP-IDF I2S TDM RX.
-- PSRAM-backed PCM recording buffer for 16 kHz/16-bit/mono audio.
+- PSRAM-backed PCM recording buffer for 24 kHz/16-bit/mono audio.
 - Runtime PCM diagnostics: captured bytes, mono sample count, PCM bytes, and peak level.
 - Recorded PCM handoff to ASR as a WAV data URI after PTT release.
 - Host contract tests cover short-press rejection, long-press start, release

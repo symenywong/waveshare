@@ -1,9 +1,10 @@
 #include "aiqa_audio_capture_hw.h"
 
+#include "aiqa_audio_i2s_bus.h"
 #include "board_wave_175c_i2c_bus.h"
 #include "board_wave_175c_pins.h"
 
-#include "driver/i2s_tdm.h"
+#include "driver/i2s_common.h"
 #include "esp_check.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
@@ -16,7 +17,6 @@
 
 static const char *TAG = "aiqa_audio_hw";
 
-static i2s_chan_handle_t s_i2s_rx_chan;
 static esp_codec_dev_handle_t s_codec;
 static aiqa_audio_capture_hw_config_t s_config;
 static bool s_started;
@@ -44,32 +44,6 @@ static int16_t abs_i16(int16_t value)
     return value < 0 ? (int16_t)-value : value;
 }
 
-static esp_err_t init_i2s_rx(const aiqa_audio_capture_hw_config_t *config)
-{
-    i2s_chan_config_t channel_config = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
-    ESP_RETURN_ON_ERROR(i2s_new_channel(&channel_config, NULL, &s_i2s_rx_chan), TAG, "I2S RX channel create failed");
-
-    i2s_tdm_config_t tdm_config = {
-        .slot_cfg = I2S_TDM_PHILIPS_SLOT_DEFAULT_CONFIG(
-            I2S_DATA_BIT_WIDTH_16BIT,
-            I2S_SLOT_MODE_STEREO,
-            I2S_TDM_SLOT0 | I2S_TDM_SLOT1 | I2S_TDM_SLOT2 | I2S_TDM_SLOT3),
-        .clk_cfg = {
-            .clk_src = I2S_CLK_SRC_DEFAULT,
-            .sample_rate_hz = config->sample_rate_hz,
-            .mclk_multiple = I2S_MCLK_MULTIPLE_256,
-        },
-        .gpio_cfg = {
-            .mclk = WAVE_175C_ES7210_MCLK,
-            .bclk = WAVE_175C_ES7210_BCLK,
-            .ws = WAVE_175C_ES7210_LRCK,
-            .dout = I2S_GPIO_UNUSED,
-            .din = WAVE_175C_ES7210_DIN,
-        },
-    };
-    return i2s_channel_init_tdm_mode(s_i2s_rx_chan, &tdm_config);
-}
-
 static esp_err_t init_codec(const aiqa_audio_capture_hw_config_t *config)
 {
     i2c_master_bus_handle_t i2c_bus = NULL;
@@ -85,8 +59,8 @@ static esp_err_t init_codec(const aiqa_audio_capture_hw_config_t *config)
 
     audio_codec_i2s_cfg_t i2s_config = {
         .port = I2S_NUM_0,
-        .rx_handle = s_i2s_rx_chan,
-        .tx_handle = NULL,
+        .rx_handle = aiqa_audio_i2s_bus_rx_handle(),
+        .tx_handle = aiqa_audio_i2s_bus_tx_handle(),
     };
     const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_config);
     ESP_RETURN_ON_FALSE(data_if != NULL, ESP_ERR_NO_MEM, TAG, "ES7210 I2S data create failed");
@@ -126,7 +100,7 @@ esp_err_t aiqa_audio_capture_hw_init(const aiqa_audio_capture_hw_config_t *confi
     }
 
     s_config = *config;
-    ESP_RETURN_ON_ERROR(init_i2s_rx(config), TAG, "I2S RX init failed");
+    ESP_RETURN_ON_ERROR(aiqa_audio_i2s_bus_init(config->sample_rate_hz), TAG, "I2S0 shared bus init failed");
     return init_codec(config);
 }
 
@@ -171,7 +145,7 @@ esp_err_t aiqa_audio_capture_hw_read_mono(
     const size_t raw_bytes = raw_samples * sizeof(s_tdm_samples[0]);
     (void)memset(s_tdm_samples, 0, raw_bytes);
     size_t bytes_read = 0;
-    ESP_RETURN_ON_ERROR(i2s_channel_read(s_i2s_rx_chan,
+    ESP_RETURN_ON_ERROR(i2s_channel_read(aiqa_audio_i2s_bus_rx_handle(),
                                          s_tdm_samples,
                                          raw_bytes,
                                          &bytes_read,

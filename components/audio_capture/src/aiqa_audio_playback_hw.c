@@ -1,10 +1,10 @@
 #include "aiqa_audio_playback_hw.h"
 
+#include "aiqa_audio_i2s_bus.h"
 #include "board_wave_175c.h"
 #include "board_wave_175c_i2c_bus.h"
 #include "board_wave_175c_pins.h"
 
-#include "driver/i2s_std.h"
 #include "esp_check.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
@@ -17,7 +17,6 @@
 
 static const char *TAG = "aiqa_playback";
 
-static i2s_chan_handle_t s_i2s_tx_chan;
 static esp_codec_dev_handle_t s_codec;
 static aiqa_audio_playback_config_t s_config;
 static bool s_started;
@@ -25,35 +24,6 @@ static bool s_started;
 static esp_err_t codec_status_to_esp(int status)
 {
     return status == ESP_CODEC_DEV_OK ? ESP_OK : ESP_FAIL;
-}
-
-static esp_err_t init_i2s_tx(const aiqa_audio_playback_config_t *config)
-{
-    i2s_chan_config_t channel_config = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
-    ESP_RETURN_ON_ERROR(i2s_new_channel(&channel_config, &s_i2s_tx_chan, NULL),
-                        TAG,
-                        "I2S TX channel create failed");
-
-    i2s_std_config_t std_config = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(config->sample_rate_hz),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
-            I2S_DATA_BIT_WIDTH_16BIT,
-            I2S_SLOT_MODE_STEREO),
-        .gpio_cfg = {
-            .mclk = WAVE_175C_ES7210_MCLK,
-            .bclk = WAVE_175C_ES7210_BCLK,
-            .ws = WAVE_175C_ES7210_LRCK,
-            .dout = WAVE_175C_ES8311_DOUT,
-            .din = I2S_GPIO_UNUSED,
-            .invert_flags = {
-                .mclk_inv = false,
-                .bclk_inv = false,
-                .ws_inv = false,
-            },
-        },
-    };
-    std_config.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
-    return i2s_channel_init_std_mode(s_i2s_tx_chan, &std_config);
 }
 
 static esp_err_t init_codec(const aiqa_audio_playback_config_t *config)
@@ -71,8 +41,8 @@ static esp_err_t init_codec(const aiqa_audio_playback_config_t *config)
 
     audio_codec_i2s_cfg_t i2s_config = {
         .port = I2S_NUM_0,
-        .rx_handle = NULL,
-        .tx_handle = s_i2s_tx_chan,
+        .rx_handle = aiqa_audio_i2s_bus_rx_handle(),
+        .tx_handle = aiqa_audio_i2s_bus_tx_handle(),
     };
     const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_config);
     ESP_RETURN_ON_FALSE(data_if != NULL, ESP_ERR_NO_MEM, TAG, "ES8311 I2S data create failed");
@@ -118,7 +88,7 @@ esp_err_t aiqa_audio_playback_hw_init(const aiqa_audio_playback_config_t *config
     }
 
     s_config = *config;
-    ESP_RETURN_ON_ERROR(init_i2s_tx(config), TAG, "I2S TX init failed");
+    ESP_RETURN_ON_ERROR(aiqa_audio_i2s_bus_init(config->sample_rate_hz), TAG, "I2S0 shared bus init failed");
     return init_codec(config);
 }
 

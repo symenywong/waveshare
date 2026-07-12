@@ -12,7 +12,11 @@
 
 static const char *TAG = "board_175c";
 
+#define WAVE_175C_AXP2101_ADDR 0x34
+#define WAVE_175C_I2C_SPEED_HZ 400000
+
 static i2c_master_bus_handle_t s_i2c_bus;
+static i2c_master_dev_handle_t s_axp2101_dev;
 
 static esp_err_t ensure_i2c_bus(void)
 {
@@ -29,6 +33,50 @@ static esp_err_t ensure_i2c_bus(void)
         .flags.enable_internal_pullup = true,
     };
     return i2c_new_master_bus(&bus_config, &s_i2c_bus);
+}
+
+static esp_err_t ensure_axp2101_device(void)
+{
+    if (s_axp2101_dev != NULL) {
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(ensure_i2c_bus(), TAG, "I2C bus init failed");
+    const i2c_device_config_t device_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = WAVE_175C_AXP2101_ADDR,
+        .scl_speed_hz = WAVE_175C_I2C_SPEED_HZ,
+    };
+    return i2c_master_bus_add_device(s_i2c_bus, &device_config, &s_axp2101_dev);
+}
+
+static esp_err_t axp2101_write_reg(uint8_t reg, uint8_t value)
+{
+    ESP_RETURN_ON_ERROR(ensure_axp2101_device(), TAG, "AXP2101 device unavailable");
+    const uint8_t data[] = {reg, value};
+    return i2c_master_transmit(s_axp2101_dev, data, sizeof(data), 100);
+}
+
+static esp_err_t init_axp2101_power(void)
+{
+    ESP_RETURN_ON_ERROR(axp2101_write_reg(0x22, 0x06), TAG, "AXP2101 power key source config failed");
+    ESP_RETURN_ON_ERROR(axp2101_write_reg(0x27, 0x10), TAG, "AXP2101 power-off hold config failed");
+    ESP_RETURN_ON_ERROR(axp2101_write_reg(0x80, 0x01), TAG, "AXP2101 DC enable config failed");
+    ESP_RETURN_ON_ERROR(axp2101_write_reg(0x90, 0x00), TAG, "AXP2101 LDO0 disable failed");
+    ESP_RETURN_ON_ERROR(axp2101_write_reg(0x91, 0x00), TAG, "AXP2101 LDO1 disable failed");
+    ESP_RETURN_ON_ERROR(axp2101_write_reg(0x82, (uint8_t)((3300 - 1500) / 100)),
+                        TAG,
+                        "AXP2101 DC1 voltage config failed");
+    ESP_RETURN_ON_ERROR(axp2101_write_reg(0x92, (uint8_t)((3300 - 500) / 100)),
+                        TAG,
+                        "AXP2101 ALDO1 voltage config failed");
+    ESP_RETURN_ON_ERROR(axp2101_write_reg(0x90, 0x01), TAG, "AXP2101 ALDO1 enable failed");
+    ESP_RETURN_ON_ERROR(axp2101_write_reg(0x64, 0x02), TAG, "AXP2101 charger voltage config failed");
+    ESP_RETURN_ON_ERROR(axp2101_write_reg(0x61, 0x02), TAG, "AXP2101 precharge current config failed");
+    ESP_RETURN_ON_ERROR(axp2101_write_reg(0x62, 0x08), TAG, "AXP2101 charge current config failed");
+    ESP_RETURN_ON_ERROR(axp2101_write_reg(0x63, 0x01), TAG, "AXP2101 termination current config failed");
+    ESP_LOGI(TAG, "AXP2101 power rails initialized for 1.75C audio/display domains");
+    return ESP_OK;
 }
 
 esp_err_t board_wave_175c_init_minimal(void)
@@ -52,6 +100,7 @@ esp_err_t board_wave_175c_init_minimal(void)
     ESP_RETURN_ON_ERROR(gpio_config(&pa_config), TAG, "PA gpio config failed");
     ESP_RETURN_ON_ERROR(board_wave_175c_set_pa_enabled(false), TAG, "PA safe-off failed");
     ESP_RETURN_ON_ERROR(ensure_i2c_bus(), TAG, "I2C bus init failed");
+    ESP_RETURN_ON_ERROR(init_axp2101_power(), TAG, "AXP2101 power init failed");
 
     ESP_LOGI(TAG, "Board constants loaded: LCD %dx%d, I2C SDA=%d SCL=%d",
              WAVE_175C_LCD_WIDTH,

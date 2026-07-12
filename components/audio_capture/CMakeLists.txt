@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "src/aiqa_audio_capture.c"
         "src/aiqa_audio_capture_hw.c"
+        "src/aiqa_audio_i2s_bus.c"
         "src/aiqa_audio_playback.c"
         "src/aiqa_audio_playback_hw.c"
     INCLUDE_DIRS "include"

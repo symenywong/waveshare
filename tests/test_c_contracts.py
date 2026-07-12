@@ -885,9 +885,9 @@ class CContractTests(unittest.TestCase):
                     assert(WAVE_175C_LCD_WIDTH == 466);
                     assert(WAVE_175C_LCD_HEIGHT == 466);
                     assert(WAVE_175C_LCD_BITS_PER_PIXEL == 16);
-                    assert(WAVE_175C_LCD_RESET == 39);
-                    assert(WAVE_175C_TOUCH_RST == 40);
-                    assert(WAVE_175C_ES7210_MCLK == 42);
+                    assert(WAVE_175C_LCD_RESET == 1);
+                    assert(WAVE_175C_TOUCH_RST == 2);
+                    assert(WAVE_175C_ES7210_MCLK == 16);
                     assert(WAVE_175C_LCD_TRANSFER_ROWS > 0);
                     assert(WAVE_175C_LCD_TRANSFER_ROWS < WAVE_175C_LCD_HEIGHT);
                     return 0;
@@ -982,10 +982,10 @@ class CContractTests(unittest.TestCase):
 
                 int main(void) {
                     aiqa_audio_capture_config_t config = aiqa_audio_capture_default_config();
-                    assert(config.sample_rate_hz == 16000);
+                    assert(config.sample_rate_hz == 24000);
                     assert(config.bits_per_sample == 16);
                     assert(config.channels == 1);
-                    assert(aiqa_audio_pcm_bytes_per_second(&config) == 32000);
+                    assert(aiqa_audio_pcm_bytes_per_second(&config) == 48000);
                     assert(config.max_record_seconds <= 20);
                     assert(config.max_pcm_bytes == aiqa_audio_pcm_bytes_per_second(&config) * config.max_record_seconds);
                     assert(aiqa_audio_capture_config_is_safe(&config));
@@ -1003,7 +1003,7 @@ class CContractTests(unittest.TestCase):
                     assert(!aiqa_audio_capture_config_is_safe(&config));
 
                     aiqa_audio_capture_hw_config_t hw_config = aiqa_audio_capture_hw_default_config();
-                    assert(hw_config.sample_rate_hz == 16000);
+                    assert(hw_config.sample_rate_hz == 24000);
                     assert(hw_config.bits_per_sample == 16);
                     assert(hw_config.source_channels == 4);
                     assert(hw_config.output_channels == 1);
