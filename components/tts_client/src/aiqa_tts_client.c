@@ -13,8 +13,8 @@
 
 static const char *TAG = "aiqa_tts";
 
-#define AIQA_TTS_STREAM_CARRY_MAX_LEN 18432u
-#define AIQA_TTS_PCM_CHUNK_MAX_BYTES 12288u
+#define AIQA_TTS_STREAM_CARRY_MAX_LEN (AIQA_TTS_AUDIO_BASE64_MAX_LEN + 4096u)
+#define AIQA_TTS_PCM_CHUNK_MAX_BYTES ((AIQA_TTS_AUDIO_BASE64_MAX_LEN * 3u) / 4u)
 
 typedef struct {
     char carry[AIQA_TTS_STREAM_CARRY_MAX_LEN];
@@ -22,10 +22,36 @@ typedef struct {
     char audio_b64[AIQA_TTS_AUDIO_BASE64_MAX_LEN];
     uint8_t pcm[AIQA_TTS_PCM_CHUNK_MAX_BYTES];
     bool overflow;
+    const char *overflow_reason;
     aiqa_tts_audio_cb_t on_audio;
     void *user_ctx;
     aiqa_tts_result_t *result;
 } aiqa_tts_stream_context_t;
+
+static void set_stream_overflow(aiqa_tts_stream_context_t *context, const char *reason)
+{
+    if (context == NULL) {
+        return;
+    }
+    context->overflow = true;
+    if (context->overflow_reason == NULL) {
+        context->overflow_reason = reason;
+    }
+}
+
+static void log_stream_audio_progress(const aiqa_tts_result_t *result, size_t pcm_len)
+{
+    if (result == NULL) {
+        return;
+    }
+    if (result->audio_chunks < 3 || (result->audio_chunks % 16u) == 0) {
+        ESP_LOGI(TAG,
+                 "TTS audio chunk decoded: chunk=%u bytes=%u total=%u",
+                 (unsigned)(result->audio_chunks + 1),
+                 (unsigned)pcm_len,
+                 (unsigned)(result->audio_bytes + pcm_len));
+    }
+}
 
 static void tts_result_reset(aiqa_tts_result_t *result)
 {
@@ -90,13 +116,21 @@ static void process_stream_event(aiqa_tts_stream_context_t *context, char *event
         return;
     }
     if (event_len >= AIQA_TTS_STREAM_CARRY_MAX_LEN) {
-        context->overflow = true;
+        set_stream_overflow(context, "event");
         return;
     }
 
     event_data[event_len] = '\0';
-    if (aiqa_tts_parse_stream_audio_data(event_data, context->audio_b64, sizeof(context->audio_b64)) !=
-        AIQA_TTS_OK) {
+    aiqa_tts_status_t parse_status =
+        aiqa_tts_parse_stream_audio_data(event_data, context->audio_b64, sizeof(context->audio_b64));
+    if (parse_status == AIQA_TTS_ERR_BUFFER_TOO_SMALL) {
+        set_stream_overflow(context, "audio_b64");
+        return;
+    }
+    if (parse_status != AIQA_TTS_OK) {
+        return;
+    }
+    if (context->audio_b64[0] == '\0') {
         return;
     }
 
@@ -108,13 +142,14 @@ static void process_stream_event(aiqa_tts_stream_context_t *context, char *event
                                               strlen(context->audio_b64));
     secure_zero(context->audio_b64, sizeof(context->audio_b64));
     if (b64_ret != 0 || pcm_len == 0 || pcm_len > sizeof(context->pcm)) {
-        context->overflow = true;
+        set_stream_overflow(context, "base64_decode");
         return;
     }
 
     if (context->on_audio != NULL) {
         context->on_audio(context->pcm, pcm_len, context->user_ctx);
     }
+    log_stream_audio_progress(context->result, pcm_len);
     if (context->result != NULL) {
         context->result->audio_bytes += pcm_len;
         context->result->audio_chunks += 1;
@@ -128,7 +163,7 @@ static void process_stream_chunk(aiqa_tts_stream_context_t *context, const char 
         return;
     }
     if (context->carry_length + chunk_len >= sizeof(context->carry)) {
-        context->overflow = true;
+        set_stream_overflow(context, "carry");
         return;
     }
 
@@ -287,7 +322,11 @@ esp_err_t aiqa_tts_speak_streaming(
         ret = esp_http_client_set_post_field(client, request_body, (int)strlen(request_body));
     }
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "Sending TTS request to configured provider");
+        ESP_LOGI(TAG,
+                 "Sending TTS request: model=%s voice=%s text_bytes=%u",
+                 config->tts_model,
+                 config->tts_voice,
+                 (unsigned)strlen(text));
         ret = esp_http_client_perform(client);
     }
 
@@ -306,9 +345,14 @@ esp_err_t aiqa_tts_speak_streaming(
             }
         }
         if (result->status != AIQA_TTS_OK) {
-            ESP_LOGE(TAG, "TTS provider failed: status=%s http=%d",
+            ESP_LOGE(TAG,
+                     "TTS provider failed: status=%s http=%d audio_chunks=%u audio_bytes=%u overflow=%d reason=%s",
                      aiqa_tts_status_name(result->status),
-                     result->http_status);
+                     result->http_status,
+                     (unsigned)result->audio_chunks,
+                     (unsigned)result->audio_bytes,
+                     stream->overflow ? 1 : 0,
+                     stream->overflow_reason == NULL ? "none" : stream->overflow_reason);
         }
     }
 

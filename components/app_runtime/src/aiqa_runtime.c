@@ -42,6 +42,7 @@ static const char *TAG = "aiqa_runtime";
 #define AIQA_RUNTIME_CHAT_PROMPT_MAX_LEN AIQA_ASR_RESPONSE_TEXT_MAX_LEN
 #define AIQA_STARTUP_AUDIO_TEST_TONE_HZ 880u
 #define AIQA_STARTUP_AUDIO_TEST_TONE_MS 900u
+#define AIQA_STARTUP_TTS_SELF_TEST_TEXT "你好，我醒啦"
 typedef struct {
     aiqa_state_t state;
     aiqa_error_code_t error;
@@ -51,7 +52,10 @@ typedef enum { AIQA_NET_COMMAND_CONNECT = 0 } aiqa_net_command_type_t;
 typedef struct {
     aiqa_net_command_type_t type;
 } aiqa_net_command_t;
-typedef enum { AIQA_CHAT_COMMAND_USER_PROMPT = 0 } aiqa_chat_command_type_t;
+typedef enum {
+    AIQA_CHAT_COMMAND_USER_PROMPT = 0,
+    AIQA_CHAT_COMMAND_TTS_SELF_TEST,
+} aiqa_chat_command_type_t;
 typedef struct {
     aiqa_chat_command_type_t type;
     char prompt[AIQA_RUNTIME_CHAT_PROMPT_MAX_LEN];
@@ -188,6 +192,16 @@ static esp_err_t post_chat_prompt(const char *prompt)
     return post_chat_command(command);
 }
 
+static esp_err_t post_tts_self_test(const char *text)
+{
+    if (text == NULL || text[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    aiqa_chat_command_t command = {.type = AIQA_CHAT_COMMAND_TTS_SELF_TEST, .prompt = {0}};
+    (void)snprintf(command.prompt, sizeof(command.prompt), "%s", text);
+    return post_chat_command(command);
+}
+
 static esp_err_t post_audio_command(aiqa_audio_command_t command)
 {
     if (s_audio_queue == NULL) {
@@ -240,6 +254,10 @@ static void maybe_run_startup_audio_test(aiqa_transition_t transition)
         return;
     }
     ESP_LOGI("aiqa_audio", "Startup playback self-test finished");
+    ret = post_tts_self_test(AIQA_STARTUP_TTS_SELF_TEST_TEXT);
+    if (ret != ESP_OK) {
+        ESP_LOGW("aiqa_tts", "Failed to queue startup TTS self-test: %s", esp_err_to_name(ret));
+    }
 }
 
 static void handle_recording_transition(aiqa_transition_t transition)
@@ -809,7 +827,17 @@ static void chat_task(void *arg)
         if (xQueueReceive(s_chat_queue, &command, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-        if (command.type != AIQA_CHAT_COMMAND_USER_PROMPT || command.prompt[0] == '\0') {
+        if (command.prompt[0] == '\0') {
+            continue;
+        }
+        if (command.type == AIQA_CHAT_COMMAND_TTS_SELF_TEST) {
+            ESP_LOGI("aiqa_tts", "Running startup online TTS self-test");
+            speak_pet_answer(command.prompt);
+            (void)memset(command.prompt, 0, sizeof(command.prompt));
+            continue;
+        }
+        if (command.type != AIQA_CHAT_COMMAND_USER_PROMPT) {
+            (void)memset(command.prompt, 0, sizeof(command.prompt));
             continue;
         }
         if (!s_config_snapshot_ready) {

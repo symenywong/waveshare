@@ -183,6 +183,10 @@ Implemented:
 - Runtime PCM diagnostics: captured bytes, mono sample count, PCM bytes, and peak level.
 - Recorded PCM handoff to ASR as a WAV data URI after PTT release.
 - Startup ES8311+PA playback self-test tone after Wi-Fi reaches `IDLE`.
+- Startup Qwen-TTS online self-test routed through the same playback path as
+  pet replies.
+- Qwen-TTS streaming parser now accepts large SSE audio chunks and treats the
+  final empty `audio.data` URL frame as a normal stream ending.
 - Host contract tests cover short-press rejection, long-press start, release
   stop, and one-shot timeout behavior.
 

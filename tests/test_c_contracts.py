@@ -704,6 +704,22 @@ class CContractTests(unittest.TestCase):
                     assert(status == AIQA_TTS_OK);
                     assert(strcmp(audio_b64, "QUJDRA==") == 0);
 
+                    char tiny_b64[4] = {0};
+                    status = aiqa_tts_parse_stream_audio_data(
+                        "data: {\\"output\\":{\\"audio\\":{\\"data\\":\\"QUJDRA==\\",\\"url\\":\\"\\"}}}\\n\\n",
+                        tiny_b64,
+                        sizeof(tiny_b64));
+                    assert(status == AIQA_TTS_ERR_BUFFER_TOO_SMALL);
+                    assert(tiny_b64[0] == '\\0');
+
+                    audio_b64[0] = 'x';
+                    status = aiqa_tts_parse_stream_audio_data(
+                        "data: {\\"output\\":{\\"audio\\":{\\"data\\":\\"\\",\\"url\\":\\"https://example.com/out.wav\\"}}}\\n\\n",
+                        audio_b64,
+                        sizeof(audio_b64));
+                    assert(status == AIQA_TTS_OK);
+                    assert(audio_b64[0] == '\\0');
+
                     audio_b64[0] = '\\0';
                     status = aiqa_tts_parse_stream_audio_data("data: [DONE]\\n\\n", audio_b64, sizeof(audio_b64));
                     assert(status == AIQA_TTS_ERR_PARSE);

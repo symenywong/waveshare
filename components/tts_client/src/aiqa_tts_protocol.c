@@ -74,20 +74,21 @@ static aiqa_tts_status_t append_escaped_json_string(char *out, size_t out_size, 
     return append_char(out, out_size, pos, '"');
 }
 
-static bool copy_json_string_value(const char *start, char *out_text, size_t out_text_size)
+static aiqa_tts_status_t copy_json_string_value(const char *start, char *out_text, size_t out_text_size)
 {
     if (start == NULL || out_text == NULL || out_text_size == 0 || *start != '"') {
-        return false;
+        return AIQA_TTS_ERR_PARSE;
     }
 
     size_t pos = 0;
     for (const char *cursor = start + 1; *cursor != '\0'; ++cursor) {
         if (*cursor == '"') {
             out_text[pos] = '\0';
-            return true;
+            return AIQA_TTS_OK;
         }
         if (pos + 1 >= out_text_size) {
-            return false;
+            out_text[0] = '\0';
+            return AIQA_TTS_ERR_BUFFER_TOO_SMALL;
         }
 
         if (*cursor != '\\') {
@@ -97,7 +98,7 @@ static bool copy_json_string_value(const char *start, char *out_text, size_t out
 
         ++cursor;
         if (*cursor == '\0') {
-            return false;
+            return AIQA_TTS_ERR_PARSE;
         }
         switch (*cursor) {
         case 'n':
@@ -115,11 +116,11 @@ static bool copy_json_string_value(const char *start, char *out_text, size_t out
             out_text[pos++] = *cursor;
             break;
         default:
-            return false;
+            return AIQA_TTS_ERR_PARSE;
         }
     }
 
-    return false;
+    return AIQA_TTS_ERR_PARSE;
 }
 
 static aiqa_tts_status_t copy_https_origin(const char *base_url, char *out_origin, size_t out_origin_size)
@@ -248,9 +249,7 @@ aiqa_tts_status_t aiqa_tts_parse_stream_audio_data(
         ++value_start;
     }
 
-    return copy_json_string_value(value_start, out_audio_b64, out_audio_b64_size)
-               ? AIQA_TTS_OK
-               : AIQA_TTS_ERR_PARSE;
+    return copy_json_string_value(value_start, out_audio_b64, out_audio_b64_size);
 }
 
 aiqa_tts_status_t aiqa_tts_status_from_http_status(int http_status)
