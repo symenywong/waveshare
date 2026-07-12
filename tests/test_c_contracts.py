@@ -181,6 +181,83 @@ class CContractTests(unittest.TestCase):
             ["components/app_core/include"],
         )
 
+    def test_long_press_interrupts_waiting_interaction_for_new_recording(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_state_machine.h"
+                #include <assert.h>
+
+                static void dispatch(aiqa_state_machine_t *m, aiqa_event_type_t type, aiqa_state_t expected) {
+                    aiqa_event_t event = {.type = type, .error = AIQA_ERROR_NONE, .value = 0};
+                    aiqa_transition_t t = aiqa_state_machine_dispatch(m, event);
+                    assert(t.accepted);
+                    assert(m->state == expected);
+                }
+
+                int main(void) {
+                    aiqa_state_machine_t machine;
+                    aiqa_state_machine_init(&machine);
+                    dispatch(&machine, AIQA_EVENT_BOOTED, AIQA_STATE_CONFIG_CHECK);
+                    dispatch(&machine, AIQA_EVENT_CONFIG_READY, AIQA_STATE_NETWORK_CONNECTING);
+                    dispatch(&machine, AIQA_EVENT_NETWORK_READY, AIQA_STATE_IDLE);
+
+                    dispatch(&machine, AIQA_EVENT_PRESS_START, AIQA_STATE_RECORDING);
+                    dispatch(&machine, AIQA_EVENT_PRESS_END, AIQA_STATE_TRANSCRIBING);
+                    dispatch(&machine, AIQA_EVENT_ASR_DONE, AIQA_STATE_THINKING);
+
+                    dispatch(&machine, AIQA_EVENT_PRESS_START, AIQA_STATE_RECORDING);
+                    assert(machine.last_error == AIQA_ERROR_NONE);
+
+                    aiqa_event_t stale_done = {.type = AIQA_EVENT_CHAT_DONE, .error = AIQA_ERROR_NONE, .value = 0};
+                    aiqa_transition_t ignored = aiqa_state_machine_dispatch(&machine, stale_done);
+                    assert(!ignored.accepted);
+                    assert(machine.state == AIQA_STATE_RECORDING);
+
+                    dispatch(&machine, AIQA_EVENT_PRESS_END, AIQA_STATE_TRANSCRIBING);
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_state_machine.c"],
+            ["components/app_core/include"],
+        )
+
+    def test_long_press_interrupts_transcribing_or_pending_asr(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_state_machine.h"
+                #include <assert.h>
+
+                static void dispatch(aiqa_state_machine_t *m, aiqa_event_type_t type, aiqa_state_t expected) {
+                    aiqa_event_t event = {.type = type, .error = AIQA_ERROR_NONE, .value = 0};
+                    aiqa_transition_t t = aiqa_state_machine_dispatch(m, event);
+                    assert(t.accepted);
+                    assert(m->state == expected);
+                }
+
+                int main(void) {
+                    aiqa_state_machine_t machine;
+                    aiqa_state_machine_init(&machine);
+                    dispatch(&machine, AIQA_EVENT_BOOTED, AIQA_STATE_CONFIG_CHECK);
+                    dispatch(&machine, AIQA_EVENT_CONFIG_READY, AIQA_STATE_NETWORK_CONNECTING);
+                    dispatch(&machine, AIQA_EVENT_NETWORK_READY, AIQA_STATE_IDLE);
+
+                    dispatch(&machine, AIQA_EVENT_PRESS_START, AIQA_STATE_RECORDING);
+                    dispatch(&machine, AIQA_EVENT_PRESS_END, AIQA_STATE_TRANSCRIBING);
+                    dispatch(&machine, AIQA_EVENT_PRESS_START, AIQA_STATE_RECORDING);
+                    dispatch(&machine, AIQA_EVENT_PRESS_END, AIQA_STATE_TRANSCRIBING);
+                    dispatch(&machine, AIQA_EVENT_ASR_JOB_SUBMITTED, AIQA_STATE_ASR_JOB_PENDING);
+                    dispatch(&machine, AIQA_EVENT_PRESS_START, AIQA_STATE_RECORDING);
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_state_machine.c"],
+            ["components/app_core/include"],
+        )
+
     def test_recoverable_asr_error_can_retry_with_next_long_press(self):
         self.compile_and_run(
             textwrap.dedent(
@@ -317,6 +394,46 @@ class CContractTests(unittest.TestCase):
                 """
             ),
             ["components/app_core/src/aiqa_hardening.c"],
+            ["components/app_core/include"],
+        )
+
+    def test_tts_pcm_buffer_collects_audio_before_playback(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_tts_pcm_buffer.h"
+                #include <assert.h>
+                #include <string.h>
+
+                int main(void) {
+                    uint8_t storage[6] = {0};
+                    aiqa_tts_pcm_buffer_t buffer;
+                    aiqa_tts_pcm_buffer_init(&buffer, storage, sizeof(storage));
+                    assert(buffer.length == 0);
+                    assert(buffer.capacity == sizeof(storage));
+                    assert(!buffer.overflow);
+
+                    const uint8_t first[] = {1, 2, 3};
+                    const uint8_t second[] = {4, 5, 6};
+                    assert(aiqa_tts_pcm_buffer_append(&buffer, first, sizeof(first)) ==
+                           AIQA_TTS_PCM_BUFFER_OK);
+                    assert(aiqa_tts_pcm_buffer_append(&buffer, second, sizeof(second)) ==
+                           AIQA_TTS_PCM_BUFFER_OK);
+                    assert(buffer.length == sizeof(storage));
+                    assert(memcmp(storage, "\\x01\\x02\\x03\\x04\\x05\\x06", sizeof(storage)) == 0);
+
+                    const uint8_t extra[] = {7, 8};
+                    assert(aiqa_tts_pcm_buffer_append(&buffer, extra, sizeof(extra)) ==
+                           AIQA_TTS_PCM_BUFFER_FULL);
+                    assert(buffer.length == sizeof(storage));
+                    assert(buffer.overflow);
+                    assert(aiqa_tts_pcm_buffer_append(0, first, sizeof(first)) ==
+                           AIQA_TTS_PCM_BUFFER_INVALID_ARG);
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_tts_pcm_buffer.c"],
             ["components/app_core/include"],
         )
 

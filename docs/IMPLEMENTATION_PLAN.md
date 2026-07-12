@@ -191,6 +191,8 @@ Implemented:
   pet replies.
 - Qwen-TTS streaming parser now accepts large SSE audio chunks and treats the
   final empty `audio.data` URL frame as a normal stream ending.
+- Qwen-TTS PCM is buffered in PSRAM before ES8311 playback, avoiding playback
+  gaps caused by variable online SSE chunk arrival timing.
 - Host contract tests cover short-press rejection, long-press start, release
   stop, and one-shot timeout behavior.
 
@@ -238,6 +240,9 @@ Implemented:
 - ASR success -> `THINKING`.
 - Latest ASR transcript -> Qwen chat request.
 - Chat success -> `IDLE_WITH_RESULT`.
+- A new BOOT long press while ASR/chat/TTS is still pending starts a new
+  interaction generation, cancels active HTTP requests, drops stale results,
+  and records the next prompt immediately.
 - Contract test covers `ASR_STARTED -> ASR_DONE -> CHAT_STARTED -> CHAT_DONE`.
 
 Not yet implemented:

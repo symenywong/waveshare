@@ -30,6 +30,8 @@ esp_err_t aiqa_tts_speak_streaming(
     void *user_ctx,
     aiqa_tts_result_t *result);
 
+void aiqa_tts_cancel_active_request(void);
+
 #ifdef __cplusplus
 }
 #endif

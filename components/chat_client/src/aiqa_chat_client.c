@@ -5,6 +5,9 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,6 +16,10 @@ static const char *TAG = "aiqa_chat";
 #define AIQA_CHAT_HTTP_RESPONSE_MAX_LEN 4096
 #define AIQA_CHAT_STREAM_CARRY_MAX_LEN 1024
 #define AIQA_CHAT_STREAM_DELTA_MAX_LEN 256
+
+static StaticSemaphore_t s_active_client_mutex_storage;
+static SemaphoreHandle_t s_active_client_mutex;
+static esp_http_client_handle_t s_active_client;
 
 typedef struct {
     char *data;
@@ -27,6 +34,42 @@ typedef struct {
     void *user_ctx;
     aiqa_chat_result_t *result;
 } aiqa_chat_response_buffer_t;
+
+static SemaphoreHandle_t active_client_mutex(void)
+{
+    if (s_active_client_mutex == NULL) {
+        s_active_client_mutex = xSemaphoreCreateMutexStatic(&s_active_client_mutex_storage);
+    }
+    return s_active_client_mutex;
+}
+
+static void set_active_client(esp_http_client_handle_t client)
+{
+    SemaphoreHandle_t mutex = active_client_mutex();
+    if (mutex == NULL) {
+        return;
+    }
+    if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+        s_active_client = client;
+        xSemaphoreGive(mutex);
+    }
+}
+
+void aiqa_chat_cancel_active_request(void)
+{
+    SemaphoreHandle_t mutex = active_client_mutex();
+    if (mutex == NULL) {
+        return;
+    }
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return;
+    }
+    if (s_active_client != NULL) {
+        ESP_LOGW(TAG, "Cancelling active chat request");
+        (void)esp_http_client_cancel_request(s_active_client);
+    }
+    xSemaphoreGive(mutex);
+}
 
 static void chat_result_reset(aiqa_chat_result_t *result)
 {
@@ -317,7 +360,9 @@ static esp_err_t chat_send_request(
     }
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Sending chat request to configured provider");
+        set_active_client(client);
         ret = esp_http_client_perform(client);
+        set_active_client(NULL);
     }
 
     result->http_status = esp_http_client_get_status_code(client);

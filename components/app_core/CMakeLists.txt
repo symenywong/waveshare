@@ -5,5 +5,6 @@ idf_component_register(
         "src/aiqa_language.c"
         "src/aiqa_ptt_button.c"
         "src/aiqa_state_machine.c"
+        "src/aiqa_tts_pcm_buffer.c"
     INCLUDE_DIRS "include"
 )

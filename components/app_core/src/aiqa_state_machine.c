@@ -149,6 +149,9 @@ aiqa_transition_t aiqa_state_machine_dispatch(aiqa_state_machine_t *machine, aiq
         }
         break;
     case AIQA_STATE_TRANSCRIBING:
+        if (event.type == AIQA_EVENT_PRESS_START) {
+            return make_transition(machine, AIQA_STATE_RECORDING, AIQA_ERROR_NONE, true);
+        }
         if (event.type == AIQA_EVENT_ASR_STARTED) {
             return make_transition(machine, AIQA_STATE_TRANSCRIBING, AIQA_ERROR_NONE, true);
         }
@@ -160,11 +163,17 @@ aiqa_transition_t aiqa_state_machine_dispatch(aiqa_state_machine_t *machine, aiq
         }
         break;
     case AIQA_STATE_ASR_JOB_PENDING:
+        if (event.type == AIQA_EVENT_PRESS_START) {
+            return make_transition(machine, AIQA_STATE_RECORDING, AIQA_ERROR_NONE, true);
+        }
         if (event.type == AIQA_EVENT_ASR_DONE) {
             return make_transition(machine, AIQA_STATE_THINKING, AIQA_ERROR_NONE, true);
         }
         break;
     case AIQA_STATE_THINKING:
+        if (event.type == AIQA_EVENT_PRESS_START) {
+            return make_transition(machine, AIQA_STATE_RECORDING, AIQA_ERROR_NONE, true);
+        }
         if (event.type == AIQA_EVENT_CHAT_STARTED) {
             return make_transition(machine, AIQA_STATE_THINKING, AIQA_ERROR_NONE, true);
         }

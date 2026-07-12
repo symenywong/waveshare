@@ -7,6 +7,9 @@
 #include "esp_log.h"
 #include "mbedtls/base64.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +18,10 @@ static const char *TAG = "aiqa_tts";
 
 #define AIQA_TTS_STREAM_CARRY_MAX_LEN (AIQA_TTS_AUDIO_BASE64_MAX_LEN + 4096u)
 #define AIQA_TTS_PCM_CHUNK_MAX_BYTES ((AIQA_TTS_AUDIO_BASE64_MAX_LEN * 3u) / 4u)
+
+static StaticSemaphore_t s_active_client_mutex_storage;
+static SemaphoreHandle_t s_active_client_mutex;
+static esp_http_client_handle_t s_active_client;
 
 typedef struct {
     char carry[AIQA_TTS_STREAM_CARRY_MAX_LEN];
@@ -27,6 +34,42 @@ typedef struct {
     void *user_ctx;
     aiqa_tts_result_t *result;
 } aiqa_tts_stream_context_t;
+
+static SemaphoreHandle_t active_client_mutex(void)
+{
+    if (s_active_client_mutex == NULL) {
+        s_active_client_mutex = xSemaphoreCreateMutexStatic(&s_active_client_mutex_storage);
+    }
+    return s_active_client_mutex;
+}
+
+static void set_active_client(esp_http_client_handle_t client)
+{
+    SemaphoreHandle_t mutex = active_client_mutex();
+    if (mutex == NULL) {
+        return;
+    }
+    if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+        s_active_client = client;
+        xSemaphoreGive(mutex);
+    }
+}
+
+void aiqa_tts_cancel_active_request(void)
+{
+    SemaphoreHandle_t mutex = active_client_mutex();
+    if (mutex == NULL) {
+        return;
+    }
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return;
+    }
+    if (s_active_client != NULL) {
+        ESP_LOGW(TAG, "Cancelling active TTS request");
+        (void)esp_http_client_cancel_request(s_active_client);
+    }
+    xSemaphoreGive(mutex);
+}
 
 static void set_stream_overflow(aiqa_tts_stream_context_t *context, const char *reason)
 {
@@ -327,7 +370,9 @@ esp_err_t aiqa_tts_speak_streaming(
                  config->tts_model,
                  config->tts_voice,
                  (unsigned)strlen(text));
+        set_active_client(client);
         ret = esp_http_client_perform(client);
+        set_active_client(NULL);
     }
 
     result->http_status = esp_http_client_get_status_code(client);

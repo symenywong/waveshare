@@ -6,6 +6,9 @@
 #include "esp_log.h"
 #include "esp_tls_crypto.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,12 +19,52 @@ static const char *TAG = "aiqa_asr";
 #define AIQA_ASR_BASE64_RAW_CHUNK_BYTES 768u
 #define AIQA_ASR_BASE64_ENCODED_CHUNK_BYTES 1028u
 
+static StaticSemaphore_t s_active_client_mutex_storage;
+static SemaphoreHandle_t s_active_client_mutex;
+static esp_http_client_handle_t s_active_client;
+
 typedef struct {
     char *data;
     size_t capacity;
     size_t length;
     bool overflow;
 } aiqa_asr_response_buffer_t;
+
+static SemaphoreHandle_t active_client_mutex(void)
+{
+    if (s_active_client_mutex == NULL) {
+        s_active_client_mutex = xSemaphoreCreateMutexStatic(&s_active_client_mutex_storage);
+    }
+    return s_active_client_mutex;
+}
+
+static void set_active_client(esp_http_client_handle_t client)
+{
+    SemaphoreHandle_t mutex = active_client_mutex();
+    if (mutex == NULL) {
+        return;
+    }
+    if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
+        s_active_client = client;
+        xSemaphoreGive(mutex);
+    }
+}
+
+void aiqa_asr_cancel_active_request(void)
+{
+    SemaphoreHandle_t mutex = active_client_mutex();
+    if (mutex == NULL) {
+        return;
+    }
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return;
+    }
+    if (s_active_client != NULL) {
+        ESP_LOGW(TAG, "Cancelling active ASR request");
+        (void)esp_http_client_cancel_request(s_active_client);
+    }
+    xSemaphoreGive(mutex);
+}
 
 static void asr_result_reset(aiqa_asr_result_t *result)
 {
@@ -269,7 +312,9 @@ esp_err_t aiqa_asr_transcribe_once(
     }
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Sending ASR request to configured provider");
+        set_active_client(client);
         ret = esp_http_client_perform(client);
+        set_active_client(NULL);
     }
 
     result->http_status = esp_http_client_get_status_code(client);
@@ -420,6 +465,7 @@ esp_err_t aiqa_asr_transcribe_pcm_wav_once(
         ESP_LOGI(TAG, "Sending ASR WAV request: pcm_bytes=%u wav_bytes=%u",
                  (unsigned)audio->pcm_bytes,
                  (unsigned)wav_bytes);
+        set_active_client(client);
         ret = esp_http_client_open(client, (int)post_len);
     }
     if (ret == ESP_OK) {
@@ -471,6 +517,7 @@ esp_err_t aiqa_asr_transcribe_pcm_wav_once(
         ESP_LOGE(TAG, "ASR WAV transport failed: %s", esp_err_to_name(ret));
     }
 
+    set_active_client(NULL);
     (void)esp_http_client_close(client);
     (void)esp_http_client_cleanup(client);
     secure_zero(auth_header, sizeof(auth_header));

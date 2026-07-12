@@ -39,6 +39,8 @@ esp_err_t aiqa_asr_transcribe_pcm_wav_once(
     const aiqa_asr_pcm_audio_t *audio,
     aiqa_asr_result_t *result);
 
+void aiqa_asr_cancel_active_request(void);
+
 #ifdef __cplusplus
 }
 #endif

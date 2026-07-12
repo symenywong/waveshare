@@ -47,6 +47,8 @@ esp_err_t aiqa_chat_send_streaming_with_language(
     void *user_ctx,
     aiqa_chat_result_t *result);
 
+void aiqa_chat_cancel_active_request(void);
+
 #ifdef __cplusplus
 }
 #endif
