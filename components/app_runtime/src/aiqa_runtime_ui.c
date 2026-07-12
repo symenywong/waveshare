@@ -113,6 +113,12 @@ static const char *ui_hint_for(aiqa_state_t state, aiqa_error_code_t error)
     if (error == AIQA_ERROR_CONFIG_MISSING) {
         return "RUN PROVISION TOOL";
     }
+    if (error == AIQA_ERROR_AUDIO_TOO_LONG ||
+        error == AIQA_ERROR_ASR_FAILED ||
+        error == AIQA_ERROR_CHAT_FAILED ||
+        error == AIQA_ERROR_TIMEOUT) {
+        return "LONG PRESS RETRY";
+    }
     if (error != AIQA_ERROR_NONE) {
         return "SEE USB SERIAL LOG";
     }

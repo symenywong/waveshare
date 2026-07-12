@@ -32,6 +32,20 @@ static aiqa_transition_t transition_error(aiqa_state_machine_t *machine, aiqa_er
     return make_transition(machine, AIQA_STATE_ERROR, error, true);
 }
 
+static bool error_allows_ptt_retry(aiqa_error_code_t error)
+{
+    switch (error) {
+    case AIQA_ERROR_AUDIO_TOO_LONG:
+    case AIQA_ERROR_ASR_FAILED:
+    case AIQA_ERROR_CHAT_FAILED:
+    case AIQA_ERROR_TIMEOUT:
+    case AIQA_ERROR_CANCELLED:
+        return true;
+    default:
+        return false;
+    }
+}
+
 void aiqa_state_machine_init(aiqa_state_machine_t *machine)
 {
     if (machine == NULL) {
@@ -164,6 +178,9 @@ aiqa_transition_t aiqa_state_machine_dispatch(aiqa_state_machine_t *machine, aiq
     case AIQA_STATE_ERROR:
         if (event.type == AIQA_EVENT_CONFIG_READY) {
             return make_transition(machine, AIQA_STATE_NETWORK_CONNECTING, AIQA_ERROR_NONE, true);
+        }
+        if (event.type == AIQA_EVENT_PRESS_START && error_allows_ptt_retry(machine->last_error)) {
+            return make_transition(machine, AIQA_STATE_RECORDING, AIQA_ERROR_NONE, true);
         }
         break;
     default:

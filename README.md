@@ -60,7 +60,9 @@ press, stores 16 kHz/16-bit/mono PCM in PSRAM, stops on release, wraps the
 recording as an in-memory WAV data URI, and sends it to Qwen ASR through the
 OpenAI-compatible `chat/completions` endpoint. Logs include byte/sample/peak
 statistics only; API keys, PCM, base64 audio, transcripts, and answers stay out
-of serial output.
+of serial output. Recoverable ASR/chat errors keep the pet interactive: the
+screen prompts `LONG PRESS RETRY`, and the next long press starts a new
+recording instead of leaving the state machine stuck on the error page.
 For Phase 7, the ASR transcript is handed to the configured Qwen chat model.
 When streaming is enabled, partial `delta.content` updates redraw the pet
 dialogue page as `PET TYPING`; the final answer maps back into the pet state

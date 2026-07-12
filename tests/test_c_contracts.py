@@ -181,6 +181,74 @@ class CContractTests(unittest.TestCase):
             ["components/app_core/include"],
         )
 
+    def test_recoverable_asr_error_can_retry_with_next_long_press(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_state_machine.h"
+                #include <assert.h>
+
+                static void dispatch(aiqa_state_machine_t *m, aiqa_event_type_t type, aiqa_state_t expected) {
+                    aiqa_event_t event = {.type = type, .error = AIQA_ERROR_NONE, .value = 0};
+                    aiqa_transition_t t = aiqa_state_machine_dispatch(m, event);
+                    assert(t.accepted);
+                    assert(m->state == expected);
+                }
+
+                int main(void) {
+                    aiqa_state_machine_t machine;
+                    aiqa_state_machine_init(&machine);
+                    dispatch(&machine, AIQA_EVENT_BOOTED, AIQA_STATE_CONFIG_CHECK);
+                    dispatch(&machine, AIQA_EVENT_CONFIG_READY, AIQA_STATE_NETWORK_CONNECTING);
+                    dispatch(&machine, AIQA_EVENT_NETWORK_READY, AIQA_STATE_IDLE);
+                    dispatch(&machine, AIQA_EVENT_PRESS_START, AIQA_STATE_RECORDING);
+                    dispatch(&machine, AIQA_EVENT_PRESS_END, AIQA_STATE_TRANSCRIBING);
+                    dispatch(&machine, AIQA_EVENT_ASR_FAILED, AIQA_STATE_ERROR);
+                    assert(machine.last_error == AIQA_ERROR_ASR_FAILED);
+
+                    dispatch(&machine, AIQA_EVENT_PRESS_START, AIQA_STATE_RECORDING);
+                    assert(machine.last_error == AIQA_ERROR_NONE);
+                    dispatch(&machine, AIQA_EVENT_PRESS_END, AIQA_STATE_TRANSCRIBING);
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_state_machine.c"],
+            ["components/app_core/include"],
+        )
+
+    def test_hard_configuration_error_cannot_retry_with_long_press(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_state_machine.h"
+                #include <assert.h>
+
+                int main(void) {
+                    aiqa_state_machine_t machine;
+                    aiqa_state_machine_init(&machine);
+                    aiqa_event_t event = {.type = AIQA_EVENT_BOOTED, .error = AIQA_ERROR_NONE, .value = 0};
+                    (void)aiqa_state_machine_dispatch(&machine, event);
+
+                    event.type = AIQA_EVENT_CONFIG_MISSING;
+                    aiqa_transition_t transition = aiqa_state_machine_dispatch(&machine, event);
+                    assert(transition.accepted);
+                    assert(machine.state == AIQA_STATE_ERROR);
+                    assert(machine.last_error == AIQA_ERROR_CONFIG_MISSING);
+
+                    event.type = AIQA_EVENT_PRESS_START;
+                    transition = aiqa_state_machine_dispatch(&machine, event);
+                    assert(!transition.accepted);
+                    assert(machine.state == AIQA_STATE_ERROR);
+                    assert(machine.last_error == AIQA_ERROR_CONFIG_MISSING);
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_state_machine.c"],
+            ["components/app_core/include"],
+        )
+
     def test_state_machine_soaks_repeated_ptt_chat_cycles(self):
         self.compile_and_run(
             textwrap.dedent(
@@ -319,6 +387,38 @@ class CContractTests(unittest.TestCase):
                     assert(strcmp(page.status, "PET TYPING") == 0);
                     assert(strcmp(page.detail, "PET HAPPY TO HELP") == 0);
                     assert(strcmp(page.hint, "YOU HELLO PET") == 0);
+                    return 0;
+                }
+                """
+            ),
+            [
+                "components/app_runtime/src/aiqa_runtime_ui.c",
+                "components/app_core/src/aiqa_dialogue_view.c",
+            ],
+            [
+                "components/app_runtime/include",
+                "components/app_core/include",
+                "components/board_wave_175c/include",
+            ],
+        )
+
+    def test_runtime_ui_hints_long_press_retry_for_recoverable_asr_error(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_runtime_ui.h"
+                #include <assert.h>
+                #include <string.h>
+
+                int main(void) {
+                    board_wave_175c_display_page_t page =
+                        aiqa_runtime_ui_page_for(AIQA_STATE_ERROR, AIQA_ERROR_ASR_FAILED);
+                    assert(strcmp(page.status, "ASR FAILED") == 0);
+                    assert(strcmp(page.hint, "LONG PRESS RETRY") == 0);
+                    assert(page.is_error);
+
+                    page = aiqa_runtime_ui_page_for(AIQA_STATE_ERROR, AIQA_ERROR_CONFIG_MISSING);
+                    assert(strcmp(page.hint, "RUN PROVISION TOOL") == 0);
                     return 0;
                 }
                 """
