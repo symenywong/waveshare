@@ -800,6 +800,8 @@ class CContractTests(unittest.TestCase):
                     assert(strstr(body, "\\"stream\\":true") != 0);
                     assert(strstr(body, "\\"enable_thinking\\":false") != 0);
                     assert(strstr(body, "Simplified Chinese") != 0);
+                    assert(strstr(body, "不要用日语") != 0);
+                    assert(strstr(body, "12+28=40") != 0);
                     assert(strstr(body, "sk-") == 0);
 
                     options.response_language = aiqa_language_chat_code(AIQA_DIALOGUE_LANGUAGE_ENGLISH);

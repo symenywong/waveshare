@@ -11,7 +11,8 @@ static const char *PET_SYSTEM_PROMPT_BASE =
 static const char *PET_SYSTEM_PROMPT_ENGLISH =
     "Reply in English with simple display-safe text.";
 static const char *PET_SYSTEM_PROMPT_CHINESE =
-    "Reply in Simplified Chinese. Keep it concise and friendly.";
+    "Reply in Simplified Chinese. 中文模式：只能用简体中文回答；不要用日语、韩语、英文、假名或罗马音，"
+    "除非用户明确要求翻译或切换英文。算术题直接给出结果，例如：12+28=40。";
 
 static const char *language_prompt_for_code(const char *language_code)
 {
@@ -169,7 +170,7 @@ aiqa_chat_status_t aiqa_chat_build_request_json(
     if (status != AIQA_CHAT_OK) {
         return status;
     }
-    char system_prompt[256];
+    char system_prompt[512];
     int prompt_written = snprintf(system_prompt,
                                   sizeof(system_prompt),
                                   "%s %s",
