@@ -8,6 +8,8 @@
 #include "aiqa_net_connect.h"
 #include "aiqa_ptt_button.h"
 #include "aiqa_provider.h"
+#include "aiqa_runtime_events.h"
+#include "aiqa_runtime_recording.h"
 #include "aiqa_runtime_ui.h"
 #include "aiqa_state_machine.h"
 #include "board_wave_175c.h"
@@ -57,16 +59,25 @@ typedef struct {
     aiqa_audio_command_type_t type;
     uint32_t max_record_ms;
 } aiqa_audio_command_t;
-typedef enum { AIQA_ASR_COMMAND_STATIC_SAMPLE = 0 } aiqa_asr_command_type_t;
+typedef enum {
+    AIQA_ASR_COMMAND_STATIC_SAMPLE = 0,
+    AIQA_ASR_COMMAND_PCM_WAV,
+} aiqa_asr_command_type_t;
 typedef struct {
     aiqa_asr_command_type_t type;
     const char *audio_ref;
+    const uint8_t *pcm;
+    size_t pcm_bytes;
+    uint32_t sample_rate_hz;
+    uint16_t bits_per_sample;
+    uint16_t channels;
 } aiqa_asr_command_t;
 static QueueHandle_t s_app_queue, s_ui_queue, s_net_queue, s_chat_queue, s_audio_queue, s_asr_queue;
 static aiqa_config_snapshot_t s_config_snapshot;
 static bool s_config_snapshot_ready;
 static char s_latest_transcript[AIQA_ASR_RESPONSE_TEXT_MAX_LEN];
 static aiqa_dialogue_view_t s_latest_dialogue;
+static aiqa_runtime_recording_t s_recording;
 static esp_err_t init_nvs(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -224,20 +235,6 @@ static void handle_recording_transition(aiqa_transition_t transition)
     }
 }
 
-static void handle_asr_transition(aiqa_transition_t transition)
-{
-    if (!transition.accepted || !transition.changed || transition.next_state != AIQA_STATE_TRANSCRIBING) {
-        return;
-    }
-    esp_err_t ret = post_asr_command((aiqa_asr_command_t){
-        .type = AIQA_ASR_COMMAND_STATIC_SAMPLE,
-        .audio_ref = AIQA_ASR_STATIC_SAMPLE_URL,
-    });
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to post ASR command: %s", esp_err_to_name(ret));
-    }
-}
-
 static void handle_chat_prompt_transition(aiqa_transition_t transition, aiqa_event_t event)
 {
     if (!transition.accepted || transition.next_state != AIQA_STATE_THINKING ||
@@ -313,7 +310,6 @@ static void app_state_task(void *arg)
                      aiqa_state_name(transition.next_state));
             post_ui_state(transition.next_state, transition.error);
             handle_recording_transition(transition);
-            handle_asr_transition(transition);
             handle_chat_prompt_transition(transition, event);
         }
         if (event.type == AIQA_EVENT_FACTORY_RESET) {
@@ -409,6 +405,7 @@ static void audio_task(void *arg)
     (void)arg;
     ESP_LOGI("aiqa_audio", "Audio task ready: ES7210 capture owner");
     const aiqa_audio_capture_hw_config_t config = aiqa_audio_capture_hw_default_config();
+    const aiqa_audio_capture_config_t capture_config = aiqa_audio_capture_default_config();
     int16_t samples[AIQA_AUDIO_CAPTURE_CHUNK_FRAMES];
     while (true) {
         aiqa_audio_command_t command;
@@ -418,15 +415,32 @@ static void audio_task(void *arg)
         if (command.type != AIQA_AUDIO_COMMAND_START_RECORDING) {
             continue;
         }
-        esp_err_t ret = aiqa_audio_capture_hw_init(&config);
+        esp_err_t ret = aiqa_runtime_recording_init(&s_recording, capture_config.max_pcm_bytes);
+        if (ret != ESP_OK) {
+            ESP_LOGE("aiqa_audio", "Recording buffer allocation failed: %s", esp_err_to_name(ret));
+            (void)aiqa_runtime_post_event((aiqa_event_t){
+                .type = AIQA_EVENT_ASR_FAILED,
+                .error = AIQA_ERROR_ASR_FAILED,
+                .value = (uint32_t)ret,
+            });
+            continue;
+        }
+        ret = aiqa_audio_capture_hw_init(&config);
         if (ret == ESP_OK) {
             ret = aiqa_audio_capture_hw_start();
         }
         if (ret != ESP_OK) {
             ESP_LOGE("aiqa_audio", "ES7210 recording start failed: %s", esp_err_to_name(ret));
+            aiqa_runtime_recording_reset(&s_recording);
+            (void)aiqa_runtime_post_event((aiqa_event_t){
+                .type = AIQA_EVENT_ASR_FAILED,
+                .error = AIQA_ERROR_ASR_FAILED,
+                .value = (uint32_t)ret,
+            });
             continue;
         }
         bool recording = true;
+        bool buffer_overflow = false;
         size_t total_bytes = 0, total_samples = 0;
         int16_t session_peak = 0;
         const uint32_t started_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
@@ -439,6 +453,12 @@ static void audio_task(void *arg)
                 total_samples += stats.mono_samples;
                 if (stats.peak_abs > session_peak) {
                     session_peak = stats.peak_abs;
+                }
+                esp_err_t append_ret =
+                    aiqa_runtime_recording_append_i16(&s_recording, samples, stats.mono_samples);
+                if (append_ret != ESP_OK) {
+                    buffer_overflow = true;
+                    recording = false;
                 }
             } else {
                 ESP_LOGW("aiqa_audio", "ES7210 read failed: %s", esp_err_to_name(ret));
@@ -455,42 +475,37 @@ static void audio_task(void *arg)
         }
         (void)aiqa_audio_capture_hw_stop();
         (void)memset(samples, 0, sizeof(samples));
-        ESP_LOGI("aiqa_audio", "PTT recording stopped: bytes=%u mono_samples=%u peak=%d",
-                 (unsigned)total_bytes, (unsigned)total_samples, (int)session_peak);
-    }
-}
-
-static bool ptt_output_to_event(aiqa_ptt_output_t output, aiqa_event_t *event)
-{
-    if (event == NULL) {
-        return false;
-    }
-
-    switch (output) {
-    case AIQA_PTT_OUTPUT_PRESS_START:
-        *event = (aiqa_event_t){
-            .type = AIQA_EVENT_PRESS_START,
-            .error = AIQA_ERROR_NONE,
-            .value = 0,
-        };
-        return true;
-    case AIQA_PTT_OUTPUT_PRESS_END:
-        *event = (aiqa_event_t){
-            .type = AIQA_EVENT_PRESS_END,
-            .error = AIQA_ERROR_NONE,
-            .value = 0,
-        };
-        return true;
-    case AIQA_PTT_OUTPUT_AUDIO_TOO_LONG:
-        *event = (aiqa_event_t){
-            .type = AIQA_EVENT_AUDIO_TOO_LONG,
-            .error = AIQA_ERROR_AUDIO_TOO_LONG,
-            .value = 0,
-        };
-        return true;
-    case AIQA_PTT_OUTPUT_NONE:
-    default:
-        return false;
+        ESP_LOGI("aiqa_audio", "PTT recording stopped: bytes=%u mono_samples=%u pcm_bytes=%u peak=%d",
+                 (unsigned)total_bytes,
+                 (unsigned)total_samples,
+                 (unsigned)s_recording.length,
+                 (int)session_peak);
+        if (buffer_overflow || !aiqa_runtime_recording_has_audio(&s_recording)) {
+            aiqa_runtime_recording_reset(&s_recording);
+            (void)aiqa_runtime_post_event((aiqa_event_t){
+                .type = buffer_overflow ? AIQA_EVENT_AUDIO_TOO_LONG : AIQA_EVENT_ASR_FAILED,
+                .error = buffer_overflow ? AIQA_ERROR_AUDIO_TOO_LONG : AIQA_ERROR_ASR_FAILED,
+                .value = 0,
+            });
+            continue;
+        }
+        ret = post_asr_command((aiqa_asr_command_t){
+            .type = AIQA_ASR_COMMAND_PCM_WAV,
+            .pcm = s_recording.pcm,
+            .pcm_bytes = s_recording.length,
+            .sample_rate_hz = capture_config.sample_rate_hz,
+            .bits_per_sample = capture_config.bits_per_sample,
+            .channels = capture_config.channels,
+        });
+        if (ret != ESP_OK) {
+            ESP_LOGE("aiqa_audio", "Failed to post PCM ASR command: %s", esp_err_to_name(ret));
+            aiqa_runtime_recording_reset(&s_recording);
+            (void)aiqa_runtime_post_event((aiqa_event_t){
+                .type = AIQA_EVENT_ASR_FAILED,
+                .error = AIQA_ERROR_ASR_FAILED,
+                .value = (uint32_t)ret,
+            });
+        }
     }
 }
 
@@ -518,7 +533,7 @@ static void button_task(void *arg)
             uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
             aiqa_ptt_output_t output = aiqa_ptt_button_update(&button, &policy, pressed, now_ms);
             aiqa_event_t event = {0};
-            if (ptt_output_to_event(output, &event)) {
+            if (aiqa_runtime_ptt_output_to_event(output, &event)) {
                 ESP_LOGI("aiqa_button", "PTT output: %s", aiqa_event_name(event.type));
                 esp_err_t post_ret = aiqa_runtime_post_event(event);
                 if (post_ret != ESP_OK) {
@@ -560,114 +575,28 @@ static void net_task(void *arg)
     }
 }
 
-static aiqa_event_t chat_result_to_event(const aiqa_chat_result_t *result, esp_err_t transport_ret)
-{
-    aiqa_chat_status_t status = result != NULL ? result->status : AIQA_CHAT_ERR_PROVIDER;
-    if (transport_ret == ESP_ERR_TIMEOUT) {
-        status = AIQA_CHAT_ERR_TIMEOUT;
-    }
-
-    switch (status) {
-    case AIQA_CHAT_OK:
-        return (aiqa_event_t){
-            .type = AIQA_EVENT_CHAT_DONE,
-            .error = AIQA_ERROR_NONE,
-            .value = 0,
-        };
-    case AIQA_CHAT_ERR_AUTH:
-        return (aiqa_event_t){
-            .type = AIQA_EVENT_AUTH_FAILED,
-            .error = AIQA_ERROR_AUTH_FAILED,
-            .value = (uint32_t)status,
-        };
-    case AIQA_CHAT_ERR_RATE_LIMITED:
-        return (aiqa_event_t){
-            .type = AIQA_EVENT_RATE_LIMITED,
-            .error = AIQA_ERROR_RATE_LIMITED,
-            .value = (uint32_t)status,
-        };
-    case AIQA_CHAT_ERR_TIMEOUT:
-        return (aiqa_event_t){
-            .type = AIQA_EVENT_TIMEOUT,
-            .error = AIQA_ERROR_TIMEOUT,
-            .value = (uint32_t)status,
-        };
-    case AIQA_CHAT_ERR_UNSUPPORTED_PROVIDER:
-        return (aiqa_event_t){
-            .type = AIQA_EVENT_PROVIDER_UNSUPPORTED,
-            .error = AIQA_ERROR_PROVIDER_UNSUPPORTED,
-            .value = (uint32_t)status,
-        };
-    default:
-        return (aiqa_event_t){
-            .type = AIQA_EVENT_CHAT_FAILED,
-            .error = AIQA_ERROR_CHAT_FAILED,
-            .value = (uint32_t)status,
-        };
-    }
-}
-
-static aiqa_event_t asr_result_to_event(const aiqa_asr_result_t *result, esp_err_t transport_ret)
-{
-    aiqa_asr_status_t status = result != NULL ? result->status : AIQA_ASR_ERR_PROVIDER;
-    if (transport_ret == ESP_ERR_TIMEOUT) {
-        status = AIQA_ASR_ERR_TIMEOUT;
-    }
-
-    switch (status) {
-    case AIQA_ASR_OK:
-        return (aiqa_event_t){
-            .type = AIQA_EVENT_ASR_DONE,
-            .error = AIQA_ERROR_NONE,
-            .value = 0,
-        };
-    case AIQA_ASR_ERR_AUTH:
-        return (aiqa_event_t){
-            .type = AIQA_EVENT_AUTH_FAILED,
-            .error = AIQA_ERROR_AUTH_FAILED,
-            .value = (uint32_t)status,
-        };
-    case AIQA_ASR_ERR_RATE_LIMITED:
-        return (aiqa_event_t){
-            .type = AIQA_EVENT_RATE_LIMITED,
-            .error = AIQA_ERROR_RATE_LIMITED,
-            .value = (uint32_t)status,
-        };
-    case AIQA_ASR_ERR_TIMEOUT:
-        return (aiqa_event_t){
-            .type = AIQA_EVENT_TIMEOUT,
-            .error = AIQA_ERROR_TIMEOUT,
-            .value = (uint32_t)status,
-        };
-    case AIQA_ASR_ERR_UNSUPPORTED_PROVIDER:
-        return (aiqa_event_t){
-            .type = AIQA_EVENT_PROVIDER_UNSUPPORTED,
-            .error = AIQA_ERROR_PROVIDER_UNSUPPORTED,
-            .value = (uint32_t)status,
-        };
-    default:
-        return (aiqa_event_t){
-            .type = AIQA_EVENT_ASR_FAILED,
-            .error = AIQA_ERROR_ASR_FAILED,
-            .value = (uint32_t)status,
-        };
-    }
-}
-
 static void asr_task(void *arg)
 {
     (void)arg;
-    ESP_LOGI("aiqa_asr", "ASR task ready: static sample transcription bring-up");
+    ESP_LOGI("aiqa_asr", "ASR task ready: PCM WAV transcription owner");
     while (true) {
         aiqa_asr_command_t command;
         if (xQueueReceive(s_asr_queue, &command, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-        if (command.type != AIQA_ASR_COMMAND_STATIC_SAMPLE || command.audio_ref == NULL) {
+        if (command.type != AIQA_ASR_COMMAND_STATIC_SAMPLE && command.type != AIQA_ASR_COMMAND_PCM_WAV) {
+            continue;
+        }
+        if ((command.type == AIQA_ASR_COMMAND_STATIC_SAMPLE && command.audio_ref == NULL) ||
+            (command.type == AIQA_ASR_COMMAND_PCM_WAV &&
+             (command.pcm == NULL || command.pcm_bytes == 0))) {
             continue;
         }
         if (!s_config_snapshot_ready) {
             ESP_LOGE("aiqa_asr", "ASR requested before config snapshot was loaded");
+            if (command.type == AIQA_ASR_COMMAND_PCM_WAV) {
+                aiqa_runtime_recording_reset(&s_recording);
+            }
             (void)aiqa_runtime_post_event((aiqa_event_t){
                 .type = AIQA_EVENT_CONFIG_CORRUPT,
                 .error = AIQA_ERROR_CONFIG_CORRUPT,
@@ -683,18 +612,35 @@ static void asr_task(void *arg)
         });
 
         aiqa_asr_result_t result = {0};
-        esp_err_t asr_ret = aiqa_asr_transcribe_once(
-            &s_config_snapshot.config,
-            &s_config_snapshot.secrets,
-            command.audio_ref,
-            &result);
+        esp_err_t asr_ret = ESP_OK;
+        if (command.type == AIQA_ASR_COMMAND_PCM_WAV) {
+            const aiqa_asr_pcm_audio_t audio = {
+                .pcm = command.pcm,
+                .pcm_bytes = command.pcm_bytes,
+                .sample_rate_hz = command.sample_rate_hz,
+                .bits_per_sample = command.bits_per_sample,
+                .channels = command.channels,
+            };
+            asr_ret = aiqa_asr_transcribe_pcm_wav_once(
+                &s_config_snapshot.config,
+                &s_config_snapshot.secrets,
+                &audio,
+                &result);
+            aiqa_runtime_recording_reset(&s_recording);
+        } else {
+            asr_ret = aiqa_asr_transcribe_once(
+                &s_config_snapshot.config,
+                &s_config_snapshot.secrets,
+                command.audio_ref,
+                &result);
+        }
         if (result.status == AIQA_ASR_OK) {
             (void)snprintf(s_latest_transcript, sizeof(s_latest_transcript), "%s", result.text);
             aiqa_dialogue_view_set_user(&s_latest_dialogue, result.text);
             ESP_LOGI("aiqa_asr", "ASR transcript ready: %u bytes", (unsigned)strlen(result.text));
         }
 
-        aiqa_event_t event = asr_result_to_event(&result, asr_ret);
+        aiqa_event_t event = aiqa_runtime_asr_result_to_event(&result, asr_ret);
         (void)memset(result.text, 0, sizeof(result.text));
         esp_err_t post_ret = aiqa_runtime_post_event(event);
         if (post_ret != ESP_OK) {
@@ -743,7 +689,7 @@ static void chat_task(void *arg)
             ESP_LOGI("aiqa_chat", "Chat answer ready: %u bytes", (unsigned)strlen(result.text));
         }
 
-        aiqa_event_t event = chat_result_to_event(&result, chat_ret);
+        aiqa_event_t event = aiqa_runtime_chat_result_to_event(&result, chat_ret);
         (void)memset(result.text, 0, sizeof(result.text));
         esp_err_t post_ret = aiqa_runtime_post_event(event);
         if (post_ret != ESP_OK) {

@@ -41,7 +41,7 @@ On boot the current firmware prints:
 - NVS provisioning status
 - Wi-Fi/SNTP network task status after provisioning
 - Qwen chat status after ASR transcript handoff
-- static Qwen ASR sample transcription status after PTT release
+- Qwen ASR status for captured WAV audio after PTT release
 
 Local host-side checks:
 
@@ -54,14 +54,12 @@ namespace is provisioned with Wi-Fi credentials and a chat API key. The AMOLED
 screen shows a readable pet page; without provisioning it should display
 `AI PET`, `SETUP NEEDED`, `NVS CONFIG MISSING`, and `RUN PROVISION TOOL`.
 Long-pressing BOOT now drives the runtime into the `LISTENING` pet state and
-release moves it toward transcription. The ES7210/I2S capture path now starts on
-press, stops on release, and logs PCM byte/sample/peak statistics for microphone
-bring-up. The ASR worker still uses the static Qwen sample until recorded PCM is
-encoded and passed into the ASR request.
-For Phase 6, transcription uses a static public audio URL through Qwen ASR via
-the OpenAI-compatible `chat/completions` endpoint; this proves provider
-selection, TLS/HTTP behavior, and runtime ASR events before microphone PCM is
-available.
+release moves it toward transcription. The ES7210/I2S capture path starts on
+press, stores 16 kHz/16-bit/mono PCM in PSRAM, stops on release, wraps the
+recording as an in-memory WAV data URI, and sends it to Qwen ASR through the
+OpenAI-compatible `chat/completions` endpoint. Logs include byte/sample/peak
+statistics only; API keys, PCM, base64 audio, transcripts, and answers stay out
+of serial output.
 For Phase 7, the ASR transcript is handed to the configured Qwen chat model and
 the result maps back into the pet state machine.
 Phase 9 adds release-hardening contracts for repeated PTT cycles, minimum heap

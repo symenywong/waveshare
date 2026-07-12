@@ -494,6 +494,8 @@ class CContractTests(unittest.TestCase):
                 #include "aiqa_asr_protocol.h"
                 #include "aiqa_config.h"
                 #include <assert.h>
+                #include <stdint.h>
+                #include <stdio.h>
                 #include <string.h>
 
                 int main(void) {
@@ -535,6 +537,58 @@ class CContractTests(unittest.TestCase):
                     assert(aiqa_asr_status_from_http_status(429) == AIQA_ASR_ERR_RATE_LIMITED);
                     assert(aiqa_asr_status_from_http_status(504) == AIQA_ASR_ERR_TIMEOUT);
                     assert(aiqa_asr_status_from_http_status(500) == AIQA_ASR_ERR_PROVIDER);
+
+                    uint8_t wav_header[AIQA_ASR_WAV_HEADER_BYTES] = {0};
+                    status = aiqa_asr_write_wav_header(wav_header, 16000, 16, 1, 32000);
+                    assert(status == AIQA_ASR_OK);
+                    assert(memcmp(wav_header, "RIFF", 4) == 0);
+                    assert(memcmp(wav_header + 8, "WAVE", 4) == 0);
+                    assert(memcmp(wav_header + 12, "fmt ", 4) == 0);
+                    assert(memcmp(wav_header + 36, "data", 4) == 0);
+                    assert(wav_header[24] == 0x80);
+                    assert(wav_header[25] == 0x3e);
+                    assert(wav_header[34] == 16);
+                    assert(wav_header[40] == 0x00);
+                    assert(wav_header[41] == 0x7d);
+                    assert(aiqa_asr_wav_total_bytes(32000) == 32044);
+                    assert(aiqa_asr_base64_encoded_len(32044) == 42728);
+
+                    aiqa_asr_options_t data_uri_options = {
+                        .audio_ref = 0,
+                        .language_hint = "zh",
+                        .enable_itn = true,
+                        .audio_source_kind = AIQA_AUDIO_SOURCE_DATA_URI,
+                        .audio_bytes = 32044,
+                    };
+                    assert(aiqa_asr_validate_audio_source(&config, &data_uri_options) == AIQA_ASR_OK);
+
+                    char prefix[AIQA_ASR_REQUEST_PART_MAX_LEN] = {0};
+                    char suffix[AIQA_ASR_REQUEST_PART_MAX_LEN] = {0};
+                    assert(aiqa_asr_build_data_uri_request_prefix_json(&config, prefix, sizeof(prefix)) == AIQA_ASR_OK);
+                    assert(aiqa_asr_build_request_suffix_json(&data_uri_options, suffix, sizeof(suffix)) == AIQA_ASR_OK);
+                    assert(strstr(prefix, "\\"data\\":\\"data:audio/wav;base64,") != 0);
+                    assert(strstr(suffix, "\\"enable_itn\\":true") != 0);
+                    char streamed[1024] = {0};
+                    assert(snprintf(streamed, sizeof(streamed), "%s%s\\"%s", prefix, "QUJD", suffix) > 0);
+                    assert(strstr(streamed, "\\"data\\":\\"data:audio/wav;base64,QUJD\\"") != 0);
+                    assert(strstr(streamed, "sk-") == 0);
+
+                    data_uri_options.audio_bytes = 11 * 1024 * 1024;
+                    assert(aiqa_asr_validate_audio_source(&config, &data_uri_options) ==
+                           AIQA_ASR_ERR_UNSUPPORTED_PROVIDER);
+
+                    aiqa_config_t chat_provider_as_asr = config;
+                    assert(snprintf(chat_provider_as_asr.asr_provider,
+                                    sizeof(chat_provider_as_asr.asr_provider),
+                                    "%s",
+                                    "dashscope_openai_chat") > 0);
+                    assert(snprintf(chat_provider_as_asr.asr_model,
+                                    sizeof(chat_provider_as_asr.asr_model),
+                                    "%s",
+                                    "qwen3.7-max") > 0);
+                    data_uri_options.audio_bytes = 32044;
+                    assert(aiqa_asr_validate_audio_source(&chat_provider_as_asr, &data_uri_options) ==
+                           AIQA_ASR_ERR_UNSUPPORTED_PROVIDER);
                     return 0;
                 }
                 """

@@ -7,6 +7,9 @@
 #include <string.h>
 
 static const char *CHAT_COMPLETIONS_PATH = "/chat/completions";
+static const char *REQUEST_AUDIO_PREFIX =
+    ",\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":["
+    "{\"type\":\"input_audio\",\"input_audio\":{\"data\":";
 
 static aiqa_asr_status_t append_char(char *out, size_t out_size, size_t *pos, char value)
 {
@@ -72,6 +75,40 @@ static aiqa_asr_status_t append_escaped_json_string(char *out, size_t out_size, 
     return append_char(out, out_size, pos, '"');
 }
 
+static aiqa_audio_source_kind_t infer_audio_source_kind(const aiqa_asr_options_t *options)
+{
+    if (options == NULL) {
+        return AIQA_AUDIO_SOURCE_MEMORY_STREAM;
+    }
+    if (options->audio_source_kind != AIQA_AUDIO_SOURCE_MEMORY_STREAM) {
+        return options->audio_source_kind;
+    }
+    if (options->audio_ref == NULL) {
+        return AIQA_AUDIO_SOURCE_MEMORY_STREAM;
+    }
+    if (strncmp(options->audio_ref, "data:", 5) == 0) {
+        return AIQA_AUDIO_SOURCE_DATA_URI;
+    }
+    return AIQA_AUDIO_SOURCE_PUBLIC_URL;
+}
+
+static aiqa_asr_status_t append_request_open_json(
+    const aiqa_config_t *config,
+    char *out_json,
+    size_t out_json_size,
+    size_t *pos)
+{
+    aiqa_asr_status_t status = append_raw(out_json, out_json_size, pos, "{\"model\":");
+    if (status != AIQA_ASR_OK) {
+        return status;
+    }
+    status = append_escaped_json_string(out_json, out_json_size, pos, config->asr_model);
+    if (status != AIQA_ASR_OK) {
+        return status;
+    }
+    return append_raw(out_json, out_json_size, pos, REQUEST_AUDIO_PREFIX);
+}
+
 aiqa_asr_status_t aiqa_asr_build_endpoint_url(
     const char *base_url,
     char *out_url,
@@ -104,27 +141,14 @@ aiqa_asr_status_t aiqa_asr_build_request_json(
         return AIQA_ASR_ERR_INVALID_ARG;
     }
 
-    const aiqa_provider_caps_t *caps = aiqa_provider_caps_for(config->asr_provider);
-    if (caps == NULL || !aiqa_provider_model_allowed(config->asr_provider, config->asr_model) ||
-        (caps->max_audio_bytes == 0 && !caps->supports_data_uri_audio && !caps->requires_public_audio_url)) {
-        return AIQA_ASR_ERR_UNSUPPORTED_PROVIDER;
+    aiqa_asr_status_t status = aiqa_asr_validate_audio_source(config, options);
+    if (status != AIQA_ASR_OK) {
+        return status;
     }
 
     out_json[0] = '\0';
     size_t pos = 0;
-    aiqa_asr_status_t status = append_raw(out_json, out_json_size, &pos, "{\"model\":");
-    if (status != AIQA_ASR_OK) {
-        return status;
-    }
-    status = append_escaped_json_string(out_json, out_json_size, &pos, config->asr_model);
-    if (status != AIQA_ASR_OK) {
-        return status;
-    }
-    status = append_raw(out_json,
-                        out_json_size,
-                        &pos,
-                        ",\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":["
-                        "{\"type\":\"input_audio\",\"input_audio\":{\"data\":");
+    status = append_request_open_json(config, out_json, out_json_size, &pos);
     if (status != AIQA_ASR_OK) {
         return status;
     }
@@ -132,7 +156,44 @@ aiqa_asr_status_t aiqa_asr_build_request_json(
     if (status != AIQA_ASR_OK) {
         return status;
     }
-    status = append_raw(out_json, out_json_size, &pos, "}}]}],\"asr_options\":{");
+    char suffix[AIQA_ASR_REQUEST_PART_MAX_LEN] = {0};
+    status = aiqa_asr_build_request_suffix_json(options, suffix, sizeof(suffix));
+    if (status != AIQA_ASR_OK) {
+        return status;
+    }
+    return append_raw(out_json, out_json_size, &pos, suffix);
+}
+
+aiqa_asr_status_t aiqa_asr_build_data_uri_request_prefix_json(
+    const aiqa_config_t *config,
+    char *out_json,
+    size_t out_json_size)
+{
+    if (config == NULL || out_json == NULL || out_json_size == 0) {
+        return AIQA_ASR_ERR_INVALID_ARG;
+    }
+
+    out_json[0] = '\0';
+    size_t pos = 0;
+    aiqa_asr_status_t status = append_request_open_json(config, out_json, out_json_size, &pos);
+    if (status != AIQA_ASR_OK) {
+        return status;
+    }
+    return append_raw(out_json, out_json_size, &pos, "\"" AIQA_ASR_DATA_URI_PREFIX);
+}
+
+aiqa_asr_status_t aiqa_asr_build_request_suffix_json(
+    const aiqa_asr_options_t *options,
+    char *out_json,
+    size_t out_json_size)
+{
+    if (options == NULL || out_json == NULL || out_json_size == 0) {
+        return AIQA_ASR_ERR_INVALID_ARG;
+    }
+
+    out_json[0] = '\0';
+    size_t pos = 0;
+    aiqa_asr_status_t status = append_raw(out_json, out_json_size, &pos, "}}]}],\"asr_options\":{");
     if (status != AIQA_ASR_OK) {
         return status;
     }
@@ -160,6 +221,102 @@ aiqa_asr_status_t aiqa_asr_build_request_json(
         return AIQA_ASR_ERR_BUFFER_TOO_SMALL;
     }
     return append_raw(out_json, out_json_size, &pos, options_json);
+}
+
+aiqa_asr_status_t aiqa_asr_validate_audio_source(
+    const aiqa_config_t *config,
+    const aiqa_asr_options_t *options)
+{
+    if (config == NULL || options == NULL) {
+        return AIQA_ASR_ERR_INVALID_ARG;
+    }
+
+    const aiqa_provider_caps_t *caps = aiqa_provider_caps_for(config->asr_provider);
+    if (caps == NULL || !aiqa_provider_model_allowed(config->asr_provider, config->asr_model) ||
+        (caps->max_audio_bytes == 0 && !caps->supports_data_uri_audio && !caps->requires_public_audio_url)) {
+        return AIQA_ASR_ERR_UNSUPPORTED_PROVIDER;
+    }
+
+    const aiqa_audio_source_kind_t source_kind = infer_audio_source_kind(options);
+    if (source_kind == AIQA_AUDIO_SOURCE_DATA_URI && !caps->supports_data_uri_audio) {
+        return AIQA_ASR_ERR_UNSUPPORTED_PROVIDER;
+    }
+    if (source_kind == AIQA_AUDIO_SOURCE_PUBLIC_URL && options->audio_ref == NULL) {
+        return AIQA_ASR_ERR_INVALID_ARG;
+    }
+    if (source_kind == AIQA_AUDIO_SOURCE_MEMORY_STREAM && options->audio_ref != NULL) {
+        return AIQA_ASR_ERR_INVALID_ARG;
+    }
+    if (options->audio_bytes > 0 && caps->max_audio_bytes > 0 && options->audio_bytes > caps->max_audio_bytes) {
+        return AIQA_ASR_ERR_UNSUPPORTED_PROVIDER;
+    }
+    return AIQA_ASR_OK;
+}
+
+size_t aiqa_asr_base64_encoded_len(size_t raw_bytes)
+{
+    if (raw_bytes > (SIZE_MAX / 4u) * 3u) {
+        return 0;
+    }
+    return ((raw_bytes + 2u) / 3u) * 4u;
+}
+
+size_t aiqa_asr_wav_total_bytes(size_t pcm_bytes)
+{
+    if (pcm_bytes > SIZE_MAX - AIQA_ASR_WAV_HEADER_BYTES) {
+        return 0;
+    }
+    return pcm_bytes + AIQA_ASR_WAV_HEADER_BYTES;
+}
+
+static void write_le16(uint8_t *out, uint16_t value)
+{
+    out[0] = (uint8_t)(value & 0xffu);
+    out[1] = (uint8_t)((value >> 8) & 0xffu);
+}
+
+static void write_le32(uint8_t *out, uint32_t value)
+{
+    out[0] = (uint8_t)(value & 0xffu);
+    out[1] = (uint8_t)((value >> 8) & 0xffu);
+    out[2] = (uint8_t)((value >> 16) & 0xffu);
+    out[3] = (uint8_t)((value >> 24) & 0xffu);
+}
+
+aiqa_asr_status_t aiqa_asr_write_wav_header(
+    uint8_t out_header[AIQA_ASR_WAV_HEADER_BYTES],
+    uint32_t sample_rate_hz,
+    uint16_t bits_per_sample,
+    uint16_t channels,
+    size_t pcm_bytes)
+{
+    if (out_header == NULL || sample_rate_hz == 0 || bits_per_sample == 0 || channels == 0 ||
+        (bits_per_sample % 8u) != 0u || pcm_bytes == 0 || pcm_bytes > UINT32_MAX - 36u) {
+        return AIQA_ASR_ERR_INVALID_ARG;
+    }
+
+    const uint32_t bytes_per_sample = (uint32_t)bits_per_sample / 8u;
+    const uint32_t byte_rate = sample_rate_hz * (uint32_t)channels * bytes_per_sample;
+    const uint16_t block_align = (uint16_t)((uint32_t)channels * bytes_per_sample);
+    if (block_align == 0 || (pcm_bytes % block_align) != 0) {
+        return AIQA_ASR_ERR_INVALID_ARG;
+    }
+
+    (void)memset(out_header, 0, AIQA_ASR_WAV_HEADER_BYTES);
+    (void)memcpy(out_header + 0, "RIFF", 4);
+    write_le32(out_header + 4, (uint32_t)(36u + pcm_bytes));
+    (void)memcpy(out_header + 8, "WAVE", 4);
+    (void)memcpy(out_header + 12, "fmt ", 4);
+    write_le32(out_header + 16, 16u);
+    write_le16(out_header + 20, 1u);
+    write_le16(out_header + 22, channels);
+    write_le32(out_header + 24, sample_rate_hz);
+    write_le32(out_header + 28, byte_rate);
+    write_le16(out_header + 32, block_align);
+    write_le16(out_header + 34, bits_per_sample);
+    (void)memcpy(out_header + 36, "data", 4);
+    write_le32(out_header + 40, (uint32_t)pcm_bytes);
+    return AIQA_ASR_OK;
 }
 
 static bool copy_json_string_value(const char *start, char *out_text, size_t out_text_size)

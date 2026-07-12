@@ -7,7 +7,7 @@ Other tasks send events or receive commands through queues.
 
 - `app_state_task`: state transitions, cancellation, error handling.
 - `ui_task`: display owner for the circular pet interface; it must not perform network or I2S.
-- `audio_task`: future I2S DMA capture, PSRAM ring buffer, max-duration guard.
+- `audio_task`: ES7210/I2S capture, PSRAM PCM buffer, max-duration guard, ASR handoff.
 - `net_task`: future HTTPS owner with TLS validation, staged timeouts, streaming.
 - `provider` adapters: request/response protocol only; no UI or socket ownership.
 
@@ -18,8 +18,8 @@ Other tasks send events or receive commands through queues.
 3. Secure provisioning: NVS schema, key redaction, factory reset, cert bundle, SNTP.
 4. Fixed-text Qwen call using `dashscope_openai_chat` and `qwen3.7-max`.
 5. Bounded push-to-talk recording with 16 kHz/16-bit mono extraction.
-6. ASR provider selection and static audio sample transcription.
-7. End-to-end PTT: recording -> ASR -> streamed chat answer -> pet response screen.
+6. ASR provider selection and recorded WAV data URI transcription.
+7. End-to-end PTT: recording -> ASR -> chat answer -> pet response screen.
 8. MiniMax chat adapter and provider capability table.
 9. Soak tests, low-memory handling, rate limits, privacy UX, release hardening.
 
@@ -152,7 +152,6 @@ Implemented:
 Not yet implemented:
 
 - Streaming chat token display.
-- Real ASR-derived prompts.
 - Device-side verified live Qwen call with provisioned Wi-Fi/API credentials.
 
 ## Current Pet UI Scope
@@ -180,14 +179,16 @@ Implemented:
 - `audio_task` owns recording start/stop commands and logs the capture session
   lifecycle.
 - ES7210 capture bring-up using `esp_codec_dev` and ESP-IDF I2S TDM RX.
-- Runtime PCM diagnostics: captured bytes, mono sample count, and peak level.
+- PSRAM-backed PCM recording buffer for 16 kHz/16-bit/mono audio.
+- Runtime PCM diagnostics: captured bytes, mono sample count, PCM bytes, and peak level.
+- Recorded PCM handoff to ASR as a WAV data URI after PTT release.
 - Host contract tests cover short-press rejection, long-press start, release
   stop, and one-shot timeout behavior.
 
 Not yet implemented:
 
-- Passing recorded PCM bytes into ASR.
-- Persisting recorded PCM beyond diagnostic chunks.
+- Touch/PWR-button PTT as the production input.
+- On-device playback or local persistence of captured audio.
 
 ## Current ASR Scope
 
@@ -197,20 +198,24 @@ Implemented:
 - DashScope ASR endpoint construction:
   - configured ASR base URL plus `/chat/completions`
   - default model `qwen3-asr-flash`
-  - static public audio URL bring-up request
 - Request JSON builder using `input_audio.data`, language hint, and ITN option.
+- Static public audio URL request kept as a fallback/contract path.
+- Streaming HTTP writer for in-memory WAV data URI requests so the full base64
+  request does not need to exist as one large JSON buffer.
+- WAV header generation and provider audio-size validation.
 - ESP-IDF `esp_http_client` transport with certificate bundle attachment.
 - HTTP/auth/rate-limit/timeout/provider failures mapped back into runtime
   events.
-- Runtime `asr_task` starts after PTT release and posts `ASR_DONE` or failure.
+- Runtime `asr_task` receives the completed PCM recording after PTT release and
+  posts `ASR_DONE` or failure.
 - Latest transcript is retained in runtime memory long enough to hand it to the
   chat worker.
 - Host contract tests for ASR request formatting, response parsing, provider
-  config separation, and provisioning CSV output.
+  config separation, WAV header/data URI construction, and provisioning CSV
+  output.
 
 Not yet implemented:
 
-- Feeding real recorded PCM into ASR.
 - MiniMax or alternate ASR providers.
 
 ## Current End-To-End PTT Scope
@@ -219,8 +224,8 @@ Implemented:
 
 - BOOT long press -> `RECORDING`.
 - BOOT release -> `TRANSCRIBING`.
-- Static Qwen ASR sample -> transcript length logged, text content kept out of
-  logs.
+- Captured ES7210 PCM -> WAV data URI -> Qwen ASR; transcript length logged,
+  text content kept out of logs.
 - ASR success -> `THINKING`.
 - Latest ASR transcript -> Qwen chat request.
 - Chat success -> `IDLE_WITH_RESULT`.
@@ -230,7 +235,6 @@ Not yet implemented:
 
 - Streaming token-by-token answer display.
 - Rendering answer text on the circular screen.
-- Real microphone PCM in the ASR request.
 
 ## Current MiniMax Scope
 
