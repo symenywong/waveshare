@@ -14,7 +14,7 @@ extern "C" {
 #define AIQA_PROVIDER_DASHSCOPE_TTS "dashscope_qwen_tts"
 #define AIQA_DEFAULT_QWEN_MODEL "qwen3.7-max"
 #define AIQA_DEFAULT_QWEN_ASR_MODEL "qwen3-asr-flash"
-#define AIQA_DEFAULT_QWEN_TTS_MODEL "qwen-tts"
+#define AIQA_DEFAULT_QWEN_TTS_MODEL "qwen3-tts-flash"
 #define AIQA_DEFAULT_QWEN_TTS_VOICE "Cherry"
 #define AIQA_DEFAULT_MINIMAX_MODEL "MiniMax-M3"
 

@@ -645,7 +645,7 @@ class CContractTests(unittest.TestCase):
             ],
         )
 
-    def test_tts_protocol_builds_streaming_qwen_pcm_request_and_parses_audio_delta(self):
+    def test_tts_protocol_builds_streaming_dashscope_qwen_pcm_request_and_parses_audio_delta(self):
         self.compile_and_run(
             textwrap.dedent(
                 """
@@ -669,7 +669,14 @@ class CContractTests(unittest.TestCase):
                         url,
                         sizeof(url));
                     assert(status == AIQA_TTS_OK);
-                    assert(strcmp(url, "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions") == 0);
+                    assert(strcmp(url, "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation") == 0);
+
+                    status = aiqa_tts_build_endpoint_url(
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        url,
+                        sizeof(url));
+                    assert(status == AIQA_TTS_OK);
+                    assert(strcmp(url, "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation") == 0);
 
                     char body[AIQA_TTS_REQUEST_MAX_LEN] = {0};
                     status = aiqa_tts_build_request_json(
@@ -679,17 +686,19 @@ class CContractTests(unittest.TestCase):
                         body,
                         sizeof(body));
                     assert(status == AIQA_TTS_OK);
-                    assert(strstr(body, "\\"model\\":\\"qwen-tts\\"") != 0);
-                    assert(strstr(body, "\\"stream\\":true") != 0);
-                    assert(strstr(body, "\\"modalities\\":[\\"audio\\"]") != 0);
+                    assert(strstr(body, "\\"model\\":\\"qwen3-tts-flash\\"") != 0);
+                    assert(strstr(body, "\\"input\\":{") != 0);
+                    assert(strstr(body, "\\"text\\":\\"PET HAPPY TO HELP\\"") != 0);
                     assert(strstr(body, "\\"voice\\":\\"Cherry\\"") != 0);
-                    assert(strstr(body, "\\"format\\":\\"pcm\\"") != 0);
-                    assert(strstr(body, "PET HAPPY TO HELP") != 0);
+                    assert(strstr(body, "\\"language_type\\":\\"Auto\\"") != 0);
+                    assert(strstr(body, "\\"stream\\"") == 0);
+                    assert(strstr(body, "\\"modalities\\"") == 0);
+                    assert(strstr(body, "\\"format\\"") == 0);
                     assert(strstr(body, "sk-") == 0);
 
                     char audio_b64[64] = {0};
                     status = aiqa_tts_parse_stream_audio_data(
-                        "data: {\\"choices\\":[{\\"delta\\":{\\"audio\\":{\\"data\\":\\"QUJDRA==\\"}}}]}\\n\\n",
+                        "data: {\\"output\\":{\\"audio\\":{\\"data\\":\\"QUJDRA==\\",\\"url\\":\\"\\"}}}\\n\\n",
                         audio_b64,
                         sizeof(audio_b64));
                     assert(status == AIQA_TTS_OK);

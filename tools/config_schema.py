@@ -87,7 +87,7 @@ class ProviderCatalog:
                         "dashscope-us.aliyuncs.com",
                         "cn-hongkong.dashscope.aliyuncs.com",
                     ),
-                    allowed_models=("qwen-tts",),
+                    allowed_models=("qwen3-tts-flash", "qwen3-tts-instruct-flash", "qwen-tts"),
                     allow_maas_workspace_hosts=True,
                     capabilities={
                         "supports_chat_stream": False,

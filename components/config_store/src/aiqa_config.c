@@ -78,8 +78,7 @@ aiqa_config_t aiqa_config_default(void)
                    "https://dashscope.aliyuncs.com/compatible-mode/v1");
     (void)snprintf(config.tts_provider, sizeof(config.tts_provider), "%s", AIQA_PROVIDER_DASHSCOPE_TTS);
     (void)snprintf(config.tts_model, sizeof(config.tts_model), "%s", AIQA_DEFAULT_QWEN_TTS_MODEL);
-    (void)snprintf(config.tts_base_url, sizeof(config.tts_base_url), "%s",
-                   "https://dashscope.aliyuncs.com/compatible-mode/v1");
+    (void)snprintf(config.tts_base_url, sizeof(config.tts_base_url), "%s", "https://dashscope.aliyuncs.com/api/v1");
     (void)snprintf(config.tts_voice, sizeof(config.tts_voice), "%s", AIQA_DEFAULT_QWEN_TTS_VOICE);
     return config;
 }

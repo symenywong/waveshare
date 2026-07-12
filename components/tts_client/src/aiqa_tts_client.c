@@ -13,8 +13,8 @@
 
 static const char *TAG = "aiqa_tts";
 
-#define AIQA_TTS_STREAM_CARRY_MAX_LEN 4096u
-#define AIQA_TTS_PCM_CHUNK_MAX_BYTES 2304u
+#define AIQA_TTS_STREAM_CARRY_MAX_LEN 18432u
+#define AIQA_TTS_PCM_CHUNK_MAX_BYTES 12288u
 
 typedef struct {
     char carry[AIQA_TTS_STREAM_CARRY_MAX_LEN];
@@ -276,6 +276,9 @@ esp_err_t aiqa_tts_speak_streaming(
     esp_err_t ret = esp_http_client_set_header(client, "Content-Type", "application/json");
     if (ret == ESP_OK) {
         ret = esp_http_client_set_header(client, "Accept", "text/event-stream");
+    }
+    if (ret == ESP_OK) {
+        ret = esp_http_client_set_header(client, "X-DashScope-SSE", "enable");
     }
     if (ret == ESP_OK) {
         ret = esp_http_client_set_header(client, "Authorization", auth_header);

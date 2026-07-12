@@ -6,7 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 
-static const char *CHAT_COMPLETIONS_PATH = "/chat/completions";
+static const char *DASHSCOPE_TTS_GENERATION_PATH =
+    "/api/v1/services/aigc/multimodal-generation/generation";
 
 static aiqa_tts_status_t append_char(char *out, size_t out_size, size_t *pos, char value)
 {
@@ -121,6 +122,31 @@ static bool copy_json_string_value(const char *start, char *out_text, size_t out
     return false;
 }
 
+static aiqa_tts_status_t copy_https_origin(const char *base_url, char *out_origin, size_t out_origin_size)
+{
+    const char *prefix = "https://";
+    const size_t prefix_len = strlen(prefix);
+    if (base_url == NULL || out_origin == NULL || out_origin_size == 0 ||
+        strncmp(base_url, prefix, prefix_len) != 0) {
+        return AIQA_TTS_ERR_INVALID_ARG;
+    }
+
+    const char *host_start = base_url + prefix_len;
+    if (*host_start == '\0' || *host_start == '/') {
+        return AIQA_TTS_ERR_INVALID_ARG;
+    }
+
+    const char *path_start = strchr(host_start, '/');
+    const size_t origin_len = path_start == NULL ? strlen(base_url) : (size_t)(path_start - base_url);
+    if (origin_len >= out_origin_size) {
+        return AIQA_TTS_ERR_BUFFER_TOO_SMALL;
+    }
+
+    (void)memcpy(out_origin, base_url, origin_len);
+    out_origin[origin_len] = '\0';
+    return AIQA_TTS_OK;
+}
+
 aiqa_tts_status_t aiqa_tts_build_endpoint_url(
     const char *base_url,
     char *out_url,
@@ -131,11 +157,13 @@ aiqa_tts_status_t aiqa_tts_build_endpoint_url(
     }
 
     out_url[0] = '\0';
-    const size_t base_len = strlen(base_url);
-    const bool has_trailing_slash = base_len > 0 && base_url[base_len - 1] == '/';
-    const size_t path_offset = has_trailing_slash ? 1 : 0;
-    const char *path = CHAT_COMPLETIONS_PATH + path_offset;
-    const int written = snprintf(out_url, out_url_size, "%s%s", base_url, path);
+    char origin[AIQA_MAX_BASE_URL_LEN] = {0};
+    aiqa_tts_status_t status = copy_https_origin(base_url, origin, sizeof(origin));
+    if (status != AIQA_TTS_OK) {
+        return status;
+    }
+
+    const int written = snprintf(out_url, out_url_size, "%s%s", origin, DASHSCOPE_TTS_GENERATION_PATH);
     if (written < 0 || (size_t)written >= out_url_size) {
         out_url[0] = '\0';
         return AIQA_TTS_ERR_BUFFER_TOO_SMALL;
@@ -169,32 +197,7 @@ aiqa_tts_status_t aiqa_tts_build_request_json(
     if (status != AIQA_TTS_OK) {
         return status;
     }
-
-    char options_json[192];
-    const int written = snprintf(options_json,
-                                 sizeof(options_json),
-                                 ",\"stream\":%s,\"modalities\":[\"audio\"],\"audio\":{\"voice\":",
-                                 options->stream ? "true" : "false");
-    if (written < 0 || (size_t)written >= sizeof(options_json)) {
-        return AIQA_TTS_ERR_BUFFER_TOO_SMALL;
-    }
-    status = append_raw(out_json, out_json_size, &pos, options_json);
-    if (status != AIQA_TTS_OK) {
-        return status;
-    }
-    status = append_escaped_json_string(out_json, out_json_size, &pos, options->voice);
-    if (status != AIQA_TTS_OK) {
-        return status;
-    }
-    status = append_raw(out_json, out_json_size, &pos, ",\"format\":");
-    if (status != AIQA_TTS_OK) {
-        return status;
-    }
-    status = append_escaped_json_string(out_json, out_json_size, &pos, options->format);
-    if (status != AIQA_TTS_OK) {
-        return status;
-    }
-    status = append_raw(out_json, out_json_size, &pos, "},\"messages\":[{\"role\":\"user\",\"content\":");
+    status = append_raw(out_json, out_json_size, &pos, ",\"input\":{\"text\":");
     if (status != AIQA_TTS_OK) {
         return status;
     }
@@ -202,7 +205,15 @@ aiqa_tts_status_t aiqa_tts_build_request_json(
     if (status != AIQA_TTS_OK) {
         return status;
     }
-    return append_raw(out_json, out_json_size, &pos, "}]}");
+    status = append_raw(out_json, out_json_size, &pos, ",\"voice\":");
+    if (status != AIQA_TTS_OK) {
+        return status;
+    }
+    status = append_escaped_json_string(out_json, out_json_size, &pos, options->voice);
+    if (status != AIQA_TTS_OK) {
+        return status;
+    }
+    return append_raw(out_json, out_json_size, &pos, ",\"language_type\":\"Auto\"}}");
 }
 
 aiqa_tts_status_t aiqa_tts_parse_stream_audio_data(

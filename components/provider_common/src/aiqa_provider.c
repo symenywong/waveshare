@@ -151,6 +151,8 @@ bool aiqa_provider_model_allowed(const char *provider_id, const char *model)
     };
     static const char *const dashscope_tts_models[] = {
         AIQA_DEFAULT_QWEN_TTS_MODEL,
+        "qwen3-tts-instruct-flash",
+        "qwen-tts",
     };
 
     if (provider_id == NULL || model == NULL) {

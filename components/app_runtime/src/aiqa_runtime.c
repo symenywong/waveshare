@@ -698,14 +698,34 @@ static void tts_playback_audio_callback(const uint8_t *pcm, size_t pcm_bytes, vo
     if (context == NULL || context->write_status != ESP_OK || pcm == NULL || pcm_bytes == 0) {
         return;
     }
-
-    esp_err_t ret = aiqa_audio_playback_hw_write_pcm(pcm, pcm_bytes);
-    if (ret != ESP_OK) {
-        context->write_status = ret;
+    if ((pcm_bytes % sizeof(int16_t)) != 0) {
+        context->write_status = ESP_ERR_INVALID_SIZE;
         return;
     }
-    context->audio_bytes += pcm_bytes;
-    context->audio_chunks += 1;
+
+    size_t offset = 0;
+    while (offset < pcm_bytes) {
+        size_t write_bytes = pcm_bytes - offset;
+        if (write_bytes > AIQA_AUDIO_PLAYBACK_CHUNK_BYTES) {
+            write_bytes = AIQA_AUDIO_PLAYBACK_CHUNK_BYTES;
+        }
+        if ((write_bytes % sizeof(int16_t)) != 0) {
+            write_bytes -= write_bytes % sizeof(int16_t);
+        }
+        if (write_bytes == 0) {
+            context->write_status = ESP_ERR_INVALID_SIZE;
+            return;
+        }
+
+        esp_err_t ret = aiqa_audio_playback_hw_write_pcm(pcm + offset, write_bytes);
+        if (ret != ESP_OK) {
+            context->write_status = ret;
+            return;
+        }
+        offset += write_bytes;
+        context->audio_bytes += write_bytes;
+        context->audio_chunks += 1;
+    }
 }
 
 static void speak_pet_answer(const char *answer)
