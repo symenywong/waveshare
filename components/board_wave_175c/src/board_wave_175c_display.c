@@ -37,6 +37,7 @@ static esp_lcd_panel_handle_t s_lcd_panel;
 static esp_lcd_panel_io_handle_t s_lcd_io;
 static SemaphoreHandle_t s_lcd_flush_done;
 static bool s_lcd_ready;
+static size_t s_pet_animation_frame;
 
 // Matches the Waveshare ESP32-S3-Touch-AMOLED-1.75 BSP CO5300 init sequence.
 static const co5300_lcd_init_cmd_t LCD_INIT_CMDS[] = {
@@ -434,24 +435,56 @@ static esp_err_t display_draw_pet_expression(board_wave_175c_pet_expression_t ex
         return ESP_ERR_INVALID_ARG;
     }
 
-    for (int row = 0; row < sprite->height; ++row) {
-        for (int col = 0; col < sprite->width; ++col) {
-            const uint16_t color = sprite->pixels[(size_t)row * sprite->width + col];
-            if (color == 0) {
-                continue;
-            }
+    uint16_t cells[BOARD_WAVE_175C_PET_SPRITE_WIDTH * BOARD_WAVE_175C_PET_SPRITE_HEIGHT] = {0};
+    if (!board_wave_175c_pet_sprite_render(sprite,
+                                           s_pet_animation_frame++,
+                                           cells,
+                                           sizeof(cells) / sizeof(cells[0]))) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
-            const int x = rect.x + col * sprite->scale;
-            const int y = rect.y + row * sprite->scale;
-            ESP_RETURN_ON_ERROR(display_draw_solid_rect(x,
-                                                        y,
-                                                        x + sprite->scale,
-                                                        y + sprite->scale,
-                                                        color),
-                                TAG, "pet sprite pixel draw failed");
+    const int chunk_rows = WAVE_175C_LCD_TRANSFER_ROWS;
+    const size_t chunk_pixels = (size_t)rect.width * (size_t)chunk_rows;
+    uint16_t *buffer = (uint16_t *)heap_caps_malloc(chunk_pixels * sizeof(uint16_t),
+                                                    MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (buffer == NULL) {
+        buffer = (uint16_t *)heap_caps_malloc(chunk_pixels * sizeof(uint16_t), MALLOC_CAP_DMA);
+    }
+    if (buffer == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    const uint16_t bg = rgb565_to_panel_wire(RGB565_PET_BG);
+    esp_err_t ret = ESP_OK;
+    for (int y_offset = 0; y_offset < rect.height; y_offset += chunk_rows) {
+        const int rows = (y_offset + chunk_rows <= rect.height) ? chunk_rows : (rect.height - y_offset);
+        for (int row = 0; row < rows; ++row) {
+            const int src_y = (y_offset + row) / sprite->scale;
+            for (int col = 0; col < rect.width; ++col) {
+                const int src_x = col / sprite->scale;
+                uint16_t color = cells[(size_t)src_y * sprite->width + (size_t)src_x];
+                buffer[(size_t)row * rect.width + (size_t)col] =
+                    color == 0 ? bg : rgb565_to_panel_wire(color);
+            }
+        }
+
+        ret = esp_lcd_panel_draw_bitmap(s_lcd_panel,
+                                        rect.x,
+                                        rect.y + y_offset,
+                                        rect.x + rect.width,
+                                        rect.y + y_offset + rows,
+                                        buffer);
+        if (ret != ESP_OK) {
+            break;
+        }
+        ret = wait_for_lcd_flush();
+        if (ret != ESP_OK) {
+            break;
         }
     }
-    return ESP_OK;
+
+    free(buffer);
+    return ret;
 }
 
 esp_err_t board_wave_175c_display_init(void)
@@ -628,6 +661,14 @@ esp_err_t board_wave_175c_display_show_page(const board_wave_175c_display_page_t
                             TAG, "LCD hint draw failed");
     }
     return ESP_OK;
+}
+
+esp_err_t board_wave_175c_display_animate_pet(
+    board_wave_175c_pet_expression_t expression,
+    uint16_t accent_rgb565)
+{
+    ESP_RETURN_ON_ERROR(board_wave_175c_display_init(), TAG, "LCD init failed");
+    return display_draw_pet_expression(expression, accent_rgb565);
 }
 
 bool board_wave_175c_display_is_ready(void)

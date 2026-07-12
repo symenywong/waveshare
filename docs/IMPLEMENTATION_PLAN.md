@@ -162,10 +162,17 @@ Not yet implemented:
 
 Implemented:
 
-- Centered 16x16 pixel pet sprite abstraction.
-- Circular-safe sprite layout contract.
-- Temporary local pixel sprites for happy, listening, thinking, and worried
-  states.
+- Centered Codex-inspired 24x24 procedural pixel pet sprite abstraction.
+- Circular-safe sprite layout contract for the 1.75C round AMOLED safe area.
+- Multi-frame pet animation for idle, listening, thinking, speaking, and
+  emotion states.
+- Scene/emotion mapping for happy, sad, shy, frustrated, bouncing, laughing,
+  crying, curious, worried, and sleepy expressions.
+- Runtime UI redraw ticker refreshes only the pet sprite region while waiting
+  in a stable state, keeping audio/chat tasks ahead of LCD animation work.
+- Dialogue view keeps a compact pet emotion hint from raw Chinese or English
+  replies, so Chinese text can still drive pet expressions even when the round
+  screen fallback text remains ASCII.
 - AMOLED page rendering now uses the sprite pet instead of geometric circle
   shapes, keeping text and pet content away from the circular screen edge.
 
@@ -291,7 +298,6 @@ Not yet implemented:
 
 - AXP2101 register reads / PWR event decoding.
 - ES8311 playback and PA pop suppression sequence.
-- Animated pet mood transitions beyond the current streaming dialogue page.
 - Production secret hardening with ESP-IDF NVS encryption:
   - flash encryption plus `nvs_keys`, or
   - HMAC eFuse key derivation.

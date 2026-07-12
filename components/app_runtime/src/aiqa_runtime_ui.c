@@ -1,5 +1,36 @@
 #include "aiqa_runtime_ui.h"
 
+#include <string.h>
+
+static bool text_contains(const char *text, const char *phrase)
+{
+    return text != NULL && phrase != NULL && strstr(text, phrase) != NULL;
+}
+
+static board_wave_175c_pet_expression_t ui_expression_for_dialogue_emotion(
+    aiqa_dialogue_emotion_t emotion)
+{
+    switch (emotion) {
+    case AIQA_DIALOGUE_EMOTION_HAPPY:
+        return BOARD_WAVE_175C_PET_EXPRESSION_HAPPY;
+    case AIQA_DIALOGUE_EMOTION_SAD:
+        return BOARD_WAVE_175C_PET_EXPRESSION_SAD;
+    case AIQA_DIALOGUE_EMOTION_SHY:
+        return BOARD_WAVE_175C_PET_EXPRESSION_SHY;
+    case AIQA_DIALOGUE_EMOTION_FRUSTRATED:
+        return BOARD_WAVE_175C_PET_EXPRESSION_FRUSTRATED;
+    case AIQA_DIALOGUE_EMOTION_BOUNCING:
+        return BOARD_WAVE_175C_PET_EXPRESSION_BOUNCING;
+    case AIQA_DIALOGUE_EMOTION_LAUGHING:
+        return BOARD_WAVE_175C_PET_EXPRESSION_LAUGHING;
+    case AIQA_DIALOGUE_EMOTION_CRYING:
+        return BOARD_WAVE_175C_PET_EXPRESSION_CRYING;
+    case AIQA_DIALOGUE_EMOTION_NONE:
+    default:
+        return BOARD_WAVE_175C_PET_EXPRESSION_SPEAKING;
+    }
+}
+
 static const char *ui_status_for(aiqa_state_t state, aiqa_error_code_t error)
 {
     if (error != AIQA_ERROR_NONE) {
@@ -166,9 +197,20 @@ static uint16_t ui_accent_for(aiqa_state_t state, aiqa_error_code_t error)
 static board_wave_175c_pet_expression_t ui_expression_for(aiqa_state_t state, aiqa_error_code_t error)
 {
     if (error != AIQA_ERROR_NONE) {
-        return error == AIQA_ERROR_CONFIG_MISSING
-                   ? BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS
-                   : BOARD_WAVE_175C_PET_EXPRESSION_WORRIED;
+        switch (error) {
+        case AIQA_ERROR_CONFIG_MISSING:
+            return BOARD_WAVE_175C_PET_EXPRESSION_SHY;
+        case AIQA_ERROR_ASR_FAILED:
+            return BOARD_WAVE_175C_PET_EXPRESSION_SAD;
+        case AIQA_ERROR_CHAT_FAILED:
+            return BOARD_WAVE_175C_PET_EXPRESSION_CRYING;
+        case AIQA_ERROR_TIMEOUT:
+        case AIQA_ERROR_RATE_LIMITED:
+        case AIQA_ERROR_AUDIO_TOO_LONG:
+            return BOARD_WAVE_175C_PET_EXPRESSION_FRUSTRATED;
+        default:
+            return BOARD_WAVE_175C_PET_EXPRESSION_WORRIED;
+        }
     }
 
     switch (state) {
@@ -177,18 +219,61 @@ static board_wave_175c_pet_expression_t ui_expression_for(aiqa_state_t state, ai
     case AIQA_STATE_CONFIG_CHECK:
         return BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS;
     case AIQA_STATE_NETWORK_CONNECTING:
+        return BOARD_WAVE_175C_PET_EXPRESSION_BOUNCING;
+    case AIQA_STATE_RECORDING:
+        return BOARD_WAVE_175C_PET_EXPRESSION_LISTENING;
     case AIQA_STATE_TRANSCRIBING:
     case AIQA_STATE_ASR_JOB_PENDING:
     case AIQA_STATE_THINKING:
         return BOARD_WAVE_175C_PET_EXPRESSION_THINKING;
-    case AIQA_STATE_RECORDING:
-        return BOARD_WAVE_175C_PET_EXPRESSION_LISTENING;
-    case AIQA_STATE_IDLE:
     case AIQA_STATE_IDLE_WITH_RESULT:
         return BOARD_WAVE_175C_PET_EXPRESSION_HAPPY;
+    case AIQA_STATE_IDLE:
+        return BOARD_WAVE_175C_PET_EXPRESSION_IDLE;
     default:
         return BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS;
     }
+}
+
+static board_wave_175c_pet_expression_t ui_dialogue_expression_for(
+    const aiqa_dialogue_view_t *dialogue)
+{
+    if (dialogue == NULL) {
+        return BOARD_WAVE_175C_PET_EXPRESSION_SPEAKING;
+    }
+    if (dialogue->pet_emotion != AIQA_DIALOGUE_EMOTION_NONE) {
+        return ui_expression_for_dialogue_emotion(dialogue->pet_emotion);
+    }
+
+    const char *pet_line = dialogue->pet_line;
+    if (text_contains(pet_line, "HAHA") ||
+        text_contains(pet_line, "LOL") ||
+        text_contains(pet_line, "FUNNY") ||
+        text_contains(pet_line, "LAUGH")) {
+        return BOARD_WAVE_175C_PET_EXPRESSION_LAUGHING;
+    }
+    if (text_contains(pet_line, "SHY") ||
+        text_contains(pet_line, "BLUSH")) {
+        return BOARD_WAVE_175C_PET_EXPRESSION_SHY;
+    }
+    if (text_contains(pet_line, "CRY") ||
+        text_contains(pet_line, "TEAR")) {
+        return BOARD_WAVE_175C_PET_EXPRESSION_CRYING;
+    }
+    if (text_contains(pet_line, "SAD") ||
+        text_contains(pet_line, "SORRY")) {
+        return BOARD_WAVE_175C_PET_EXPRESSION_SAD;
+    }
+    if (text_contains(pet_line, "FRUSTRAT") ||
+        text_contains(pet_line, "CONFUSED")) {
+        return BOARD_WAVE_175C_PET_EXPRESSION_FRUSTRATED;
+    }
+    if (text_contains(pet_line, "HAPPY") ||
+        text_contains(pet_line, "GREAT") ||
+        text_contains(pet_line, "NICE")) {
+        return BOARD_WAVE_175C_PET_EXPRESSION_HAPPY;
+    }
+    return BOARD_WAVE_175C_PET_EXPRESSION_SPEAKING;
 }
 
 board_wave_175c_display_page_t aiqa_runtime_ui_page_for(aiqa_state_t state, aiqa_error_code_t error)
@@ -208,6 +293,10 @@ board_wave_175c_display_page_t aiqa_runtime_ui_page_for_dialogue(
     const bool show_answer_dialogue = has_dialogue && state == AIQA_STATE_IDLE_WITH_RESULT;
     const bool show_stream_dialogue = has_dialogue && state == AIQA_STATE_THINKING;
     const bool show_dialogue = show_answer_dialogue || show_stream_dialogue;
+    board_wave_175c_pet_expression_t expression = ui_expression_for(state, error);
+    if (show_answer_dialogue) {
+        expression = ui_dialogue_expression_for(dialogue);
+    }
     return (board_wave_175c_display_page_t){
         .title = "AI PET",
         .status = show_stream_dialogue ? "PET TYPING" : (show_dialogue ? "PET SAYS" : ui_status_for(state, error)),
@@ -217,6 +306,6 @@ board_wave_175c_display_page_t aiqa_runtime_ui_page_for_dialogue(
                     : ui_hint_for(state, error),
         .accent_rgb565 = ui_accent_for(state, error),
         .is_error = error != AIQA_ERROR_NONE && error != AIQA_ERROR_CONFIG_MISSING,
-        .expression = ui_expression_for(state, error),
+        .expression = expression,
     };
 }

@@ -35,6 +35,7 @@ static const char *TAG = "aiqa_runtime";
 #define AIQA_CHAT_QUEUE_DEPTH 2
 #define AIQA_AUDIO_QUEUE_DEPTH 2
 #define AIQA_ASR_QUEUE_DEPTH 2
+#define AIQA_UI_ANIMATION_INTERVAL_MS 650u
 #define AIQA_TASK_STACK_APP 4096
 #define AIQA_TASK_STACK_UI 6144
 #define AIQA_TASK_STACK_AUDIO 6144
@@ -584,25 +585,44 @@ static void ui_task(void *arg)
     } else {
         ESP_LOGW("aiqa_ui", "LCD init failed; serial UI remains active: %s", esp_err_to_name(display_ret));
     }
+    bool have_last_message = false;
+    bool animation_warning_reported = false;
+    aiqa_ui_message_t last_message = {0};
     while (true) {
         aiqa_ui_message_t message;
-        if (xQueueReceive(s_ui_queue, &message, portMAX_DELAY) != pdTRUE) {
-            continue;
-        }
-        if (message.error == AIQA_ERROR_NONE) {
-            ESP_LOGI("aiqa_ui", "UI state: %s", aiqa_state_name(message.state));
+        const bool received =
+            xQueueReceive(s_ui_queue, &message, pdMS_TO_TICKS(AIQA_UI_ANIMATION_INTERVAL_MS)) == pdTRUE;
+        if (received) {
+            last_message = message;
+            have_last_message = true;
+            animation_warning_reported = false;
+            if (message.error == AIQA_ERROR_NONE) {
+                ESP_LOGI("aiqa_ui", "UI state: %s", aiqa_state_name(message.state));
+            } else {
+                ESP_LOGW("aiqa_ui", "UI state: %s error=%s",
+                         aiqa_state_name(message.state),
+                         aiqa_error_name(message.error));
+            }
+        } else if (display_ready && have_last_message) {
+            message = last_message;
         } else {
-            ESP_LOGW("aiqa_ui", "UI state: %s error=%s",
-                     aiqa_state_name(message.state),
-                     aiqa_error_name(message.error));
+            continue;
         }
         if (display_ready) {
             const board_wave_175c_display_page_t page =
                 aiqa_runtime_ui_page_for_dialogue(message.state, message.error, &message.dialogue);
-            display_ret = board_wave_175c_display_show_page(&page);
+            display_ret = received
+                              ? board_wave_175c_display_show_page(&page)
+                              : board_wave_175c_display_animate_pet(page.expression, page.accent_rgb565);
             if (display_ret != ESP_OK) {
-                ESP_LOGW("aiqa_ui", "LCD page draw failed: %s", esp_err_to_name(display_ret));
-                display_ready = false;
+                if (received || !animation_warning_reported) {
+                    ESP_LOGW("aiqa_ui", "LCD %s draw failed: %s",
+                             received ? "page" : "pet animation",
+                             esp_err_to_name(display_ret));
+                    animation_warning_reported = !received;
+                }
+            } else if (!received) {
+                animation_warning_reported = false;
             }
         }
     }
@@ -1205,7 +1225,7 @@ esp_err_t aiqa_runtime_start(void)
     }
 
     if (xTaskCreate(app_state_task, "aiqa_state", AIQA_TASK_STACK_APP, NULL, 8, NULL) != pdPASS ||
-        xTaskCreate(ui_task, "aiqa_ui", AIQA_TASK_STACK_UI, NULL, 6, NULL) != pdPASS ||
+        xTaskCreate(ui_task, "aiqa_ui", AIQA_TASK_STACK_UI, NULL, 4, NULL) != pdPASS ||
         xTaskCreate(audio_task, "aiqa_audio", AIQA_TASK_STACK_AUDIO, NULL, 5, NULL) != pdPASS ||
         xTaskCreate(button_task, "aiqa_button", AIQA_TASK_STACK_BUTTON, NULL, 5, NULL) != pdPASS ||
         xTaskCreate(net_task, "aiqa_net", AIQA_TASK_STACK_NET, NULL, 5, NULL) != pdPASS ||

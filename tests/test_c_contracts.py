@@ -449,11 +449,13 @@ class CContractTests(unittest.TestCase):
                 int main(void) {
                     aiqa_dialogue_view_t view;
                     aiqa_dialogue_view_clear(&view);
+                    assert(view.pet_emotion == AIQA_DIALOGUE_EMOTION_NONE);
                     aiqa_dialogue_view_set_user(&view, "hello tiny pet, please explain rain");
                     aiqa_dialogue_view_set_pet(&view, "Rain is cloud water falling back down.");
                     assert(view.has_dialogue);
                     assert(strcmp(view.user_line, "YOU HELLO TINY PET") == 0);
                     assert(strcmp(view.pet_line, "PET RAIN IS CLOUD WATER") == 0);
+                    assert(view.pet_emotion == AIQA_DIALOGUE_EMOTION_NONE);
 
                     board_wave_175c_display_rect_t rect = {0};
                     assert(board_wave_175c_display_centered_text_rect(strlen(view.user_line), 2, 372, &rect));
@@ -463,6 +465,11 @@ class CContractTests(unittest.TestCase):
                     aiqa_dialogue_view_set_pet(&view, "好的，我听到了");
                     assert(strcmp(view.user_line, "YOU VOICE RECEIVED") == 0);
                     assert(strcmp(view.pet_line, "PET ANSWER READY") == 0);
+                    assert(view.pet_emotion == AIQA_DIALOGUE_EMOTION_NONE);
+
+                    aiqa_dialogue_view_set_pet(&view, "我现在很开心");
+                    assert(strcmp(view.pet_line, "PET ANSWER READY") == 0);
+                    assert(view.pet_emotion == AIQA_DIALOGUE_EMOTION_HAPPY);
                     return 0;
                 }
                 """
@@ -504,6 +511,123 @@ class CContractTests(unittest.TestCase):
                     assert(strcmp(page.status, "PET TYPING") == 0);
                     assert(strcmp(page.detail, "PET HAPPY TO HELP") == 0);
                     assert(strcmp(page.hint, "YOU HELLO PET") == 0);
+                    return 0;
+                }
+                """
+            ),
+            [
+                "components/app_runtime/src/aiqa_runtime_ui.c",
+                "components/app_core/src/aiqa_dialogue_view.c",
+            ],
+            [
+                "components/app_runtime/include",
+                "components/app_core/include",
+                "components/board_wave_175c/include",
+            ],
+        )
+
+    def test_runtime_ui_selects_codex_pet_scenes_and_emotions(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_runtime_ui.h"
+                #include "aiqa_dialogue_view.h"
+                #include <assert.h>
+
+                int main(void) {
+                    board_wave_175c_display_page_t page =
+                        aiqa_runtime_ui_page_for(AIQA_STATE_IDLE, AIQA_ERROR_NONE);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_IDLE);
+
+                    page = aiqa_runtime_ui_page_for(AIQA_STATE_RECORDING, AIQA_ERROR_NONE);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_LISTENING);
+
+                    page = aiqa_runtime_ui_page_for(AIQA_STATE_THINKING, AIQA_ERROR_NONE);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_THINKING);
+
+                    page = aiqa_runtime_ui_page_for(AIQA_STATE_NETWORK_CONNECTING, AIQA_ERROR_NONE);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_BOUNCING);
+
+                    aiqa_dialogue_view_t dialogue;
+                    aiqa_dialogue_view_clear(&dialogue);
+                    aiqa_dialogue_view_set_pet(&dialogue, "here is your answer");
+                    page = aiqa_runtime_ui_page_for_dialogue(
+                        AIQA_STATE_IDLE_WITH_RESULT,
+                        AIQA_ERROR_NONE,
+                        &dialogue);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_SPEAKING);
+
+                    aiqa_dialogue_view_set_pet(&dialogue, "haha that was funny");
+                    page = aiqa_runtime_ui_page_for_dialogue(
+                        AIQA_STATE_IDLE_WITH_RESULT,
+                        AIQA_ERROR_NONE,
+                        &dialogue);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_LAUGHING);
+
+                    aiqa_dialogue_view_set_pet(&dialogue, "I am shy");
+                    page = aiqa_runtime_ui_page_for_dialogue(
+                        AIQA_STATE_IDLE_WITH_RESULT,
+                        AIQA_ERROR_NONE,
+                        &dialogue);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_SHY);
+
+                    aiqa_dialogue_view_set_pet(&dialogue, "今天很开心");
+                    page = aiqa_runtime_ui_page_for_dialogue(
+                        AIQA_STATE_IDLE_WITH_RESULT,
+                        AIQA_ERROR_NONE,
+                        &dialogue);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_HAPPY);
+
+                    aiqa_dialogue_view_set_pet(&dialogue, "我有点难过");
+                    page = aiqa_runtime_ui_page_for_dialogue(
+                        AIQA_STATE_IDLE_WITH_RESULT,
+                        AIQA_ERROR_NONE,
+                        &dialogue);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_SAD);
+
+                    aiqa_dialogue_view_set_pet(&dialogue, "突然害羞了");
+                    page = aiqa_runtime_ui_page_for_dialogue(
+                        AIQA_STATE_IDLE_WITH_RESULT,
+                        AIQA_ERROR_NONE,
+                        &dialogue);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_SHY);
+
+                    aiqa_dialogue_view_set_pet(&dialogue, "有点沮丧");
+                    page = aiqa_runtime_ui_page_for_dialogue(
+                        AIQA_STATE_IDLE_WITH_RESULT,
+                        AIQA_ERROR_NONE,
+                        &dialogue);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_FRUSTRATED);
+
+                    aiqa_dialogue_view_set_pet(&dialogue, "一起蹦跳吧");
+                    page = aiqa_runtime_ui_page_for_dialogue(
+                        AIQA_STATE_IDLE_WITH_RESULT,
+                        AIQA_ERROR_NONE,
+                        &dialogue);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_BOUNCING);
+
+                    aiqa_dialogue_view_set_pet(&dialogue, "哈哈大笑");
+                    page = aiqa_runtime_ui_page_for_dialogue(
+                        AIQA_STATE_IDLE_WITH_RESULT,
+                        AIQA_ERROR_NONE,
+                        &dialogue);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_LAUGHING);
+
+                    aiqa_dialogue_view_set_pet(&dialogue, "我要大哭了");
+                    page = aiqa_runtime_ui_page_for_dialogue(
+                        AIQA_STATE_IDLE_WITH_RESULT,
+                        AIQA_ERROR_NONE,
+                        &dialogue);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_CRYING);
+
+                    page = aiqa_runtime_ui_page_for(AIQA_STATE_ERROR, AIQA_ERROR_ASR_FAILED);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_SAD);
+
+                    page = aiqa_runtime_ui_page_for(AIQA_STATE_ERROR, AIQA_ERROR_TIMEOUT);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_FRUSTRATED);
+
+                    page = aiqa_runtime_ui_page_for(AIQA_STATE_ERROR, AIQA_ERROR_CHAT_FAILED);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_CRYING);
                     return 0;
                 }
                 """
@@ -1126,17 +1250,27 @@ class CContractTests(unittest.TestCase):
                 #include <assert.h>
 
                 int main(void) {
-                    for (int expression = BOARD_WAVE_175C_PET_EXPRESSION_SLEEPY;
-                         expression <= BOARD_WAVE_175C_PET_EXPRESSION_WORRIED;
+                    uint16_t pixels[BOARD_WAVE_175C_PET_SPRITE_WIDTH *
+                                    BOARD_WAVE_175C_PET_SPRITE_HEIGHT] = {0};
+                    for (int expression = 0;
+                         expression < BOARD_WAVE_175C_PET_EXPRESSION_COUNT;
                          ++expression) {
                         const board_wave_175c_pet_sprite_t *sprite =
                             board_wave_175c_pet_sprite_for_expression((board_wave_175c_pet_expression_t)expression);
                         assert(sprite != 0);
-                        assert(sprite->pixels != 0);
-                        assert(sprite->pixel_count == 256);
-                        assert(sprite->width == 16);
-                        assert(sprite->height == 16);
-                        assert(sprite->scale == 9);
+                        assert(sprite->pixel_count == BOARD_WAVE_175C_PET_SPRITE_WIDTH *
+                                                BOARD_WAVE_175C_PET_SPRITE_HEIGHT);
+                        assert(sprite->width == BOARD_WAVE_175C_PET_SPRITE_WIDTH);
+                        assert(sprite->height == BOARD_WAVE_175C_PET_SPRITE_HEIGHT);
+                        assert(sprite->scale == BOARD_WAVE_175C_PET_SPRITE_SCALE);
+                        assert(sprite->frame_count >= 2);
+                        assert(board_wave_175c_pet_sprite_render(sprite, 0, pixels,
+                                                                 sizeof(pixels) / sizeof(pixels[0])));
+                        assert(board_wave_175c_pet_sprite_render(sprite, 1, pixels,
+                                                                 sizeof(pixels) / sizeof(pixels[0])));
+                        assert(pixels[(BOARD_WAVE_175C_PET_SPRITE_HEIGHT / 2) *
+                                      BOARD_WAVE_175C_PET_SPRITE_WIDTH +
+                                      BOARD_WAVE_175C_PET_SPRITE_WIDTH / 2] != 0);
 
                         board_wave_175c_display_rect_t rect = {0};
                         assert(board_wave_175c_pet_sprite_rect(sprite, &rect));
@@ -1145,6 +1279,9 @@ class CContractTests(unittest.TestCase):
                         assert(board_wave_175c_display_rect_inside_safe_circle(
                             rect.x, rect.y, rect.width, rect.height));
                     }
+                    const board_wave_175c_pet_sprite_t *fallback =
+                        board_wave_175c_pet_sprite_for_expression((board_wave_175c_pet_expression_t)999);
+                    assert(fallback->expression == BOARD_WAVE_175C_PET_EXPRESSION_IDLE);
                     assert(board_wave_175c_pet_sprite_layout_is_circle_safe());
                     return 0;
                 }

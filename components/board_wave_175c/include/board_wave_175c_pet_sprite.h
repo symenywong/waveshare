@@ -11,19 +11,19 @@
 extern "C" {
 #endif
 
-#define BOARD_WAVE_175C_PET_SPRITE_WIDTH 16
-#define BOARD_WAVE_175C_PET_SPRITE_HEIGHT 16
-#define BOARD_WAVE_175C_PET_SPRITE_SCALE 9
+#define BOARD_WAVE_175C_PET_SPRITE_WIDTH 24
+#define BOARD_WAVE_175C_PET_SPRITE_HEIGHT 24
+#define BOARD_WAVE_175C_PET_SPRITE_SCALE 7
 
 typedef struct {
     board_wave_175c_pet_expression_t expression;
-    const uint16_t *pixels;
     size_t pixel_count;
     int width;
     int height;
     int scale;
     int center_x;
     int center_y;
+    size_t frame_count;
 } board_wave_175c_pet_sprite_t;
 
 const board_wave_175c_pet_sprite_t *board_wave_175c_pet_sprite_for_expression(
@@ -32,6 +32,12 @@ const board_wave_175c_pet_sprite_t *board_wave_175c_pet_sprite_for_expression(
 bool board_wave_175c_pet_sprite_rect(
     const board_wave_175c_pet_sprite_t *sprite,
     board_wave_175c_display_rect_t *rect);
+
+bool board_wave_175c_pet_sprite_render(
+    const board_wave_175c_pet_sprite_t *sprite,
+    size_t frame_index,
+    uint16_t *out_pixels,
+    size_t out_pixel_count);
 
 bool board_wave_175c_pet_sprite_layout_is_circle_safe(void);
 

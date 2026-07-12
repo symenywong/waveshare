@@ -39,6 +39,9 @@ esp_err_t board_wave_175c_display_init(void);
 esp_err_t board_wave_175c_display_draw_test_pattern(void);
 esp_err_t board_wave_175c_display_fill_rgb565(uint16_t color);
 esp_err_t board_wave_175c_display_show_page(const board_wave_175c_display_page_t *page);
+esp_err_t board_wave_175c_display_animate_pet(
+    board_wave_175c_pet_expression_t expression,
+    uint16_t accent_rgb565);
 bool board_wave_175c_display_is_ready(void);
 
 #ifdef __cplusplus
