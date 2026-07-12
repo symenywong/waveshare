@@ -263,6 +263,9 @@ Implemented:
   - maximum consecutive provider failures
   - transcript and answer redaction defaults
 - Host contract tests verify heap gating and cooldown calculations.
+- Captured ES7210 PCM is wrapped as an in-memory WAV for ASR.
+- Chat streaming now parses SSE `delta.content` chunks and redraws the pet
+  dialogue page while the model is still answering.
 
 Not yet implemented:
 
@@ -273,9 +276,8 @@ Not yet implemented:
 Not yet implemented:
 
 - AXP2101 register reads / PWR event decoding.
-- Passing captured ES7210 PCM into ASR.
 - ES8311 playback and PA pop suppression sequence.
-- Animated pet mood transitions and richer response presentation.
+- Animated pet mood transitions beyond the current streaming dialogue page.
 - Production secret hardening with ESP-IDF NVS encryption:
   - flash encryption plus `nvs_keys`, or
   - HMAC eFuse key derivation.

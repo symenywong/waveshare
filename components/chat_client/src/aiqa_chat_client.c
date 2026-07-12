@@ -11,12 +11,21 @@
 static const char *TAG = "aiqa_chat";
 
 #define AIQA_CHAT_HTTP_RESPONSE_MAX_LEN 4096
+#define AIQA_CHAT_STREAM_CARRY_MAX_LEN 1024
+#define AIQA_CHAT_STREAM_DELTA_MAX_LEN 256
 
 typedef struct {
     char *data;
     size_t capacity;
     size_t length;
-    bool overflow;
+    bool body_overflow;
+    bool stream_overflow;
+    bool stream;
+    char carry[AIQA_CHAT_STREAM_CARRY_MAX_LEN];
+    size_t carry_length;
+    aiqa_chat_event_cb_t on_delta;
+    void *user_ctx;
+    aiqa_chat_result_t *result;
 } aiqa_chat_response_buffer_t;
 
 static void chat_result_reset(aiqa_chat_result_t *result)
@@ -29,6 +38,113 @@ static void chat_result_reset(aiqa_chat_result_t *result)
         .http_status = 0,
         .text = {0},
     };
+}
+
+static void append_result_delta(aiqa_chat_response_buffer_t *buffer, const char *delta)
+{
+    if (buffer == NULL || buffer->result == NULL || delta == NULL || delta[0] == '\0') {
+        return;
+    }
+
+    const size_t used = strlen(buffer->result->text);
+    const size_t delta_len = strlen(delta);
+    const size_t available = sizeof(buffer->result->text) - used - 1;
+    if (available == 0) {
+        return;
+    }
+
+    const size_t copy_len = delta_len < available ? delta_len : available;
+    (void)memcpy(buffer->result->text + used, delta, copy_len);
+    buffer->result->text[used + copy_len] = '\0';
+    if (buffer->on_delta != NULL) {
+        buffer->on_delta(delta, buffer->user_ctx);
+    }
+}
+
+static void process_stream_event(aiqa_chat_response_buffer_t *buffer, const char *event_data, size_t event_len)
+{
+    if (buffer == NULL || event_data == NULL || event_len == 0) {
+        return;
+    }
+    if (event_len >= AIQA_CHAT_STREAM_CARRY_MAX_LEN) {
+        buffer->stream_overflow = true;
+        return;
+    }
+
+    char event_text[AIQA_CHAT_STREAM_CARRY_MAX_LEN];
+    (void)memcpy(event_text, event_data, event_len);
+    event_text[event_len] = '\0';
+
+    char delta[AIQA_CHAT_STREAM_DELTA_MAX_LEN] = {0};
+    if (aiqa_chat_parse_stream_delta_text(event_text, delta, sizeof(delta)) == AIQA_CHAT_OK) {
+        append_result_delta(buffer, delta);
+    }
+}
+
+static char *find_stream_event_separator(char *data, size_t length, size_t *separator_len)
+{
+    if (data == NULL || separator_len == NULL) {
+        return NULL;
+    }
+
+    for (size_t index = 0; index + 1 < length; ++index) {
+        if (data[index] == '\n' && data[index + 1] == '\n') {
+            *separator_len = 2;
+            return data + index;
+        }
+        if (index + 3 < length &&
+            data[index] == '\r' &&
+            data[index + 1] == '\n' &&
+            data[index + 2] == '\r' &&
+            data[index + 3] == '\n') {
+            *separator_len = 4;
+            return data + index;
+        }
+    }
+
+    return NULL;
+}
+
+static void process_stream_chunk(aiqa_chat_response_buffer_t *buffer, const char *chunk, size_t chunk_len)
+{
+    if (buffer == NULL || chunk == NULL || chunk_len == 0) {
+        return;
+    }
+    if (buffer->carry_length + chunk_len >= sizeof(buffer->carry)) {
+        buffer->stream_overflow = true;
+        return;
+    }
+
+    (void)memcpy(buffer->carry + buffer->carry_length, chunk, chunk_len);
+    buffer->carry_length += chunk_len;
+    buffer->carry[buffer->carry_length] = '\0';
+
+    size_t separator_len = 0;
+    char *separator = find_stream_event_separator(buffer->carry, buffer->carry_length, &separator_len);
+    while (separator != NULL) {
+        const size_t event_len = (size_t)(separator - buffer->carry);
+        process_stream_event(buffer, buffer->carry, event_len);
+
+        const size_t consumed = event_len + separator_len;
+        const size_t remaining = buffer->carry_length - consumed;
+        if (remaining > 0) {
+            (void)memmove(buffer->carry, buffer->carry + consumed, remaining);
+        }
+        buffer->carry_length = remaining;
+        buffer->carry[buffer->carry_length] = '\0';
+        separator = find_stream_event_separator(buffer->carry, buffer->carry_length, &separator_len);
+    }
+}
+
+static void process_stream_remainder(aiqa_chat_response_buffer_t *buffer)
+{
+    if (buffer == NULL || buffer->carry_length == 0) {
+        return;
+    }
+
+    process_stream_event(buffer, buffer->carry, buffer->carry_length);
+    buffer->carry_length = 0;
+    buffer->carry[0] = '\0';
 }
 
 static esp_err_t chat_http_event_handler(esp_http_client_event_t *event)
@@ -44,13 +160,16 @@ static esp_err_t chat_http_event_handler(esp_http_client_event_t *event)
 
     const size_t chunk_len = (size_t)event->data_len;
     if (buffer->length + chunk_len >= buffer->capacity) {
-        buffer->overflow = true;
-        return ESP_OK;
+        buffer->body_overflow = true;
+    } else {
+        (void)memcpy(buffer->data + buffer->length, event->data, chunk_len);
+        buffer->length += chunk_len;
+        buffer->data[buffer->length] = '\0';
     }
 
-    (void)memcpy(buffer->data + buffer->length, event->data, chunk_len);
-    buffer->length += chunk_len;
-    buffer->data[buffer->length] = '\0';
+    if (buffer->stream) {
+        process_stream_chunk(buffer, (const char *)event->data, chunk_len);
+    }
     return ESP_OK;
 }
 
@@ -74,10 +193,13 @@ static void secure_zero(void *data, size_t length)
     }
 }
 
-esp_err_t aiqa_chat_send_once(
+static esp_err_t chat_send_request(
     const aiqa_config_t *config,
     const aiqa_secret_config_t *secrets,
     const char *prompt,
+    bool stream,
+    aiqa_chat_event_cb_t on_delta,
+    void *user_ctx,
     aiqa_chat_result_t *result)
 {
     chat_result_reset(result);
@@ -87,6 +209,11 @@ esp_err_t aiqa_chat_send_once(
     if (aiqa_config_validate(config) != AIQA_CONFIG_OK ||
         aiqa_secret_config_validate(secrets) != AIQA_SECRET_OK) {
         result->status = AIQA_CHAT_ERR_INVALID_ARG;
+        return ESP_ERR_INVALID_ARG;
+    }
+    const aiqa_provider_caps_t *caps = aiqa_provider_caps_for(config->active_provider);
+    if (stream && (caps == NULL || !caps->supports_chat_stream)) {
+        result->status = AIQA_CHAT_ERR_UNSUPPORTED_PROVIDER;
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -101,7 +228,7 @@ esp_err_t aiqa_chat_send_once(
     }
 
     aiqa_chat_options_t options = {
-        .stream = false,
+        .stream = stream,
         .hide_reasoning = config->hide_reasoning,
         .max_completion_tokens = config->max_completion_tokens,
     };
@@ -135,7 +262,14 @@ esp_err_t aiqa_chat_send_once(
         .data = response_body,
         .capacity = AIQA_CHAT_HTTP_RESPONSE_MAX_LEN,
         .length = 0,
-        .overflow = false,
+        .body_overflow = false,
+        .stream_overflow = false,
+        .stream = stream,
+        .carry = {0},
+        .carry_length = 0,
+        .on_delta = on_delta,
+        .user_ctx = user_ctx,
+        .result = result,
     };
     esp_http_client_config_t http_config = {
         .url = endpoint_url,
@@ -170,6 +304,9 @@ esp_err_t aiqa_chat_send_once(
     }
 
     esp_err_t ret = esp_http_client_set_header(client, "Content-Type", "application/json");
+    if (ret == ESP_OK && stream) {
+        ret = esp_http_client_set_header(client, "Accept", "text/event-stream");
+    }
     if (ret == ESP_OK) {
         ret = esp_http_client_set_header(client, "Authorization", auth_header);
     }
@@ -185,13 +322,22 @@ esp_err_t aiqa_chat_send_once(
     if (ret != ESP_OK) {
         result->status = status_from_transport(ret);
         ESP_LOGE(TAG, "Chat transport failed: %s", esp_err_to_name(ret));
-    } else if (response.overflow) {
+    } else if (!stream && response.body_overflow) {
         result->status = AIQA_CHAT_ERR_BUFFER_TOO_SMALL;
         ESP_LOGE(TAG, "Chat response exceeded buffer");
     } else {
         result->status = aiqa_chat_status_from_http_status(result->http_status);
         if (result->status == AIQA_CHAT_OK) {
-            result->status = aiqa_chat_parse_response_text(response.data, result->text, sizeof(result->text));
+            if (stream) {
+                process_stream_remainder(&response);
+                if (response.stream_overflow) {
+                    result->status = AIQA_CHAT_ERR_BUFFER_TOO_SMALL;
+                } else if (result->text[0] == '\0') {
+                    result->status = AIQA_CHAT_ERR_PARSE;
+                }
+            } else {
+                result->status = aiqa_chat_parse_response_text(response.data, result->text, sizeof(result->text));
+            }
         }
         if (result->status != AIQA_CHAT_OK) {
             ESP_LOGE(TAG, "Chat provider failed: status=%s http=%d",
@@ -207,4 +353,24 @@ esp_err_t aiqa_chat_send_once(
     free(request_body);
     free(response_body);
     return ret == ESP_OK ? ESP_OK : ret;
+}
+
+esp_err_t aiqa_chat_send_once(
+    const aiqa_config_t *config,
+    const aiqa_secret_config_t *secrets,
+    const char *prompt,
+    aiqa_chat_result_t *result)
+{
+    return chat_send_request(config, secrets, prompt, false, NULL, NULL, result);
+}
+
+esp_err_t aiqa_chat_send_streaming(
+    const aiqa_config_t *config,
+    const aiqa_secret_config_t *secrets,
+    const char *prompt,
+    aiqa_chat_event_cb_t on_delta,
+    void *user_ctx,
+    aiqa_chat_result_t *result)
+{
+    return chat_send_request(config, secrets, prompt, true, on_delta, user_ctx, result);
 }

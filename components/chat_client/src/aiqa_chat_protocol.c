@@ -243,6 +243,42 @@ aiqa_chat_status_t aiqa_chat_parse_response_text(
     return copy_json_string_value(value_start, out_text, out_text_size) ? AIQA_CHAT_OK : AIQA_CHAT_ERR_PARSE;
 }
 
+aiqa_chat_status_t aiqa_chat_parse_stream_delta_text(
+    const char *stream_chunk,
+    char *out_text,
+    size_t out_text_size)
+{
+    if (stream_chunk == NULL || out_text == NULL || out_text_size == 0) {
+        return AIQA_CHAT_ERR_INVALID_ARG;
+    }
+    out_text[0] = '\0';
+
+    if (strstr(stream_chunk, "[DONE]") != NULL) {
+        return AIQA_CHAT_ERR_PARSE;
+    }
+
+    const char *search_start = strstr(stream_chunk, "\"delta\"");
+    if (search_start == NULL) {
+        return AIQA_CHAT_ERR_PARSE;
+    }
+
+    const char *content_key = strstr(search_start, "\"content\"");
+    if (content_key == NULL) {
+        return AIQA_CHAT_ERR_PARSE;
+    }
+
+    const char *colon = strchr(content_key, ':');
+    if (colon == NULL) {
+        return AIQA_CHAT_ERR_PARSE;
+    }
+    const char *value_start = colon + 1;
+    while (*value_start == ' ' || *value_start == '\t' || *value_start == '\n' || *value_start == '\r') {
+        ++value_start;
+    }
+
+    return copy_json_string_value(value_start, out_text, out_text_size) ? AIQA_CHAT_OK : AIQA_CHAT_ERR_PARSE;
+}
+
 aiqa_chat_status_t aiqa_chat_status_from_http_status(int http_status)
 {
     if (http_status >= 200 && http_status < 300) {

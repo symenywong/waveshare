@@ -41,6 +41,7 @@ On boot the current firmware prints:
 - NVS provisioning status
 - Wi-Fi/SNTP network task status after provisioning
 - Qwen chat status after ASR transcript handoff
+- Qwen streaming chat deltas as `PET TYPING` dialogue updates
 - Qwen ASR status for captured WAV audio after PTT release
 
 Local host-side checks:
@@ -60,8 +61,10 @@ recording as an in-memory WAV data URI, and sends it to Qwen ASR through the
 OpenAI-compatible `chat/completions` endpoint. Logs include byte/sample/peak
 statistics only; API keys, PCM, base64 audio, transcripts, and answers stay out
 of serial output.
-For Phase 7, the ASR transcript is handed to the configured Qwen chat model and
-the result maps back into the pet state machine.
+For Phase 7, the ASR transcript is handed to the configured Qwen chat model.
+When streaming is enabled, partial `delta.content` updates redraw the pet
+dialogue page as `PET TYPING`; the final answer maps back into the pet state
+machine as `PET SAYS`.
 Phase 9 adds release-hardening contracts for repeated PTT cycles, minimum heap
 before model requests, provider rate-limit cooldown, and privacy defaults that
 keep transcripts and answers out of logs.

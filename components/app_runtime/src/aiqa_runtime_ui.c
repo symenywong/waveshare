@@ -195,14 +195,16 @@ board_wave_175c_display_page_t aiqa_runtime_ui_page_for_dialogue(
     aiqa_error_code_t error,
     const aiqa_dialogue_view_t *dialogue)
 {
-    const bool show_dialogue = error == AIQA_ERROR_NONE &&
-                               state == AIQA_STATE_IDLE_WITH_RESULT &&
-                               dialogue != NULL &&
-                               dialogue->has_dialogue &&
-                               dialogue->pet_line[0] != '\0';
+    const bool has_dialogue = error == AIQA_ERROR_NONE &&
+                              dialogue != NULL &&
+                              dialogue->has_dialogue &&
+                              dialogue->pet_line[0] != '\0';
+    const bool show_answer_dialogue = has_dialogue && state == AIQA_STATE_IDLE_WITH_RESULT;
+    const bool show_stream_dialogue = has_dialogue && state == AIQA_STATE_THINKING;
+    const bool show_dialogue = show_answer_dialogue || show_stream_dialogue;
     return (board_wave_175c_display_page_t){
         .title = "AI PET",
-        .status = show_dialogue ? "PET SAYS" : ui_status_for(state, error),
+        .status = show_stream_dialogue ? "PET TYPING" : (show_dialogue ? "PET SAYS" : ui_status_for(state, error)),
         .detail = show_dialogue ? dialogue->pet_line : ui_detail_for(state, error),
         .hint = show_dialogue && dialogue->user_line[0] != '\0'
                     ? dialogue->user_line

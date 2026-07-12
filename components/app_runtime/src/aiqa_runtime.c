@@ -51,6 +51,9 @@ typedef struct {
     aiqa_chat_command_type_t type;
     char prompt[AIQA_RUNTIME_CHAT_PROMPT_MAX_LEN];
 } aiqa_chat_command_t;
+typedef struct {
+    char answer[AIQA_CHAT_RESPONSE_TEXT_MAX_LEN];
+} aiqa_chat_stream_ui_context_t;
 typedef enum {
     AIQA_AUDIO_COMMAND_START_RECORDING = 0,
     AIQA_AUDIO_COMMAND_STOP_RECORDING,
@@ -311,6 +314,8 @@ static void app_state_task(void *arg)
             post_ui_state(transition.next_state, transition.error);
             handle_recording_transition(transition);
             handle_chat_prompt_transition(transition, event);
+        } else if (event.type == AIQA_EVENT_CHAT_TOKEN) {
+            post_ui_state(transition.next_state, transition.error);
         }
         if (event.type == AIQA_EVENT_FACTORY_RESET) {
             esp_err_t erase_ret = aiqa_config_erase_nvs_namespace();
@@ -649,6 +654,36 @@ static void asr_task(void *arg)
     }
 }
 
+static void chat_stream_delta_callback(const char *delta, void *user_ctx)
+{
+    aiqa_chat_stream_ui_context_t *context = (aiqa_chat_stream_ui_context_t *)user_ctx;
+    if (context == NULL || delta == NULL || delta[0] == '\0') {
+        return;
+    }
+
+    const size_t used = strlen(context->answer);
+    const size_t delta_len = strlen(delta);
+    const size_t available = sizeof(context->answer) - used - 1;
+    const size_t copy_len = delta_len < available ? delta_len : available;
+    if (copy_len > 0) {
+        (void)memcpy(context->answer + used, delta, copy_len);
+        context->answer[used + copy_len] = '\0';
+    }
+
+    aiqa_dialogue_view_t updated = s_latest_dialogue;
+    aiqa_dialogue_view_set_pet(&updated, context->answer);
+    if (strcmp(updated.pet_line, s_latest_dialogue.pet_line) == 0) {
+        return;
+    }
+
+    s_latest_dialogue = updated;
+    (void)aiqa_runtime_post_event((aiqa_event_t){
+        .type = AIQA_EVENT_CHAT_TOKEN,
+        .error = AIQA_ERROR_NONE,
+        .value = 0,
+    });
+}
+
 static void chat_task(void *arg)
 {
     (void)arg;
@@ -678,11 +713,25 @@ static void chat_task(void *arg)
         });
 
         aiqa_chat_result_t result = {0};
-        esp_err_t chat_ret = aiqa_chat_send_once(
-            &s_config_snapshot.config,
-            &s_config_snapshot.secrets,
-            command.prompt,
-            &result);
+        aiqa_chat_stream_ui_context_t stream_context = {0};
+        const aiqa_provider_caps_t *chat_caps =
+            aiqa_provider_caps_for(s_config_snapshot.config.active_provider);
+        const bool use_stream = s_config_snapshot.config.stream &&
+                                chat_caps != NULL &&
+                                chat_caps->supports_chat_stream;
+        esp_err_t chat_ret = use_stream
+                                 ? aiqa_chat_send_streaming(
+                                       &s_config_snapshot.config,
+                                       &s_config_snapshot.secrets,
+                                       command.prompt,
+                                       chat_stream_delta_callback,
+                                       &stream_context,
+                                       &result)
+                                 : aiqa_chat_send_once(
+                                       &s_config_snapshot.config,
+                                       &s_config_snapshot.secrets,
+                                       command.prompt,
+                                       &result);
         (void)memset(command.prompt, 0, sizeof(command.prompt));
         if (result.status == AIQA_CHAT_OK) {
             aiqa_dialogue_view_set_pet(&s_latest_dialogue, result.text);

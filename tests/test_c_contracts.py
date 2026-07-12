@@ -316,8 +316,9 @@ class CContractTests(unittest.TestCase):
                     assert(!page.is_error);
 
                     page = aiqa_runtime_ui_page_for_dialogue(AIQA_STATE_THINKING, AIQA_ERROR_NONE, &dialogue);
-                    assert(strcmp(page.status, "THINKING") == 0);
-                    assert(strcmp(page.detail, "ASKING ONLINE MODEL") == 0);
+                    assert(strcmp(page.status, "PET TYPING") == 0);
+                    assert(strcmp(page.detail, "PET HAPPY TO HELP") == 0);
+                    assert(strcmp(page.hint, "YOU HELLO PET") == 0);
                     return 0;
                 }
                 """
@@ -412,6 +413,63 @@ class CContractTests(unittest.TestCase):
                     assert(aiqa_chat_status_from_http_status(429) == AIQA_CHAT_ERR_RATE_LIMITED);
                     assert(aiqa_chat_status_from_http_status(504) == AIQA_CHAT_ERR_TIMEOUT);
                     assert(aiqa_chat_status_from_http_status(500) == AIQA_CHAT_ERR_PROVIDER);
+                    return 0;
+                }
+                """
+            ),
+            [
+                "components/chat_client/src/aiqa_chat_protocol.c",
+                "components/config_store/src/aiqa_config.c",
+                "components/provider_common/src/aiqa_provider.c",
+            ],
+            [
+                "components/chat_client/include",
+                "components/config_store/include",
+                "components/provider_common/include",
+            ],
+        )
+
+    def test_chat_protocol_builds_qwen_stream_request_and_parses_sse_delta(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_chat_protocol.h"
+                #include "aiqa_config.h"
+                #include <assert.h>
+                #include <string.h>
+
+                int main(void) {
+                    aiqa_config_t config = aiqa_config_default();
+                    aiqa_chat_options_t options = {
+                        .stream = true,
+                        .hide_reasoning = true,
+                        .max_completion_tokens = 64,
+                    };
+
+                    char body[AIQA_CHAT_REQUEST_MAX_LEN] = {0};
+                    aiqa_chat_status_t status = aiqa_chat_build_request_json(
+                        &config,
+                        &options,
+                        "tell me a small pet fact",
+                        body,
+                        sizeof(body));
+                    assert(status == AIQA_CHAT_OK);
+                    assert(strstr(body, "\\"stream\\":true") != 0);
+                    assert(strstr(body, "\\"enable_thinking\\":false") != 0);
+                    assert(strstr(body, "sk-") == 0);
+
+                    char delta[64] = {0};
+                    status = aiqa_chat_parse_stream_delta_text(
+                        "data: {\\"choices\\":[{\\"delta\\":{\\"role\\":\\"assistant\\",\\"content\\":\\"Hello pet!\\\\n\\"}}]}\\n\\n",
+                        delta,
+                        sizeof(delta));
+                    assert(status == AIQA_CHAT_OK);
+                    assert(strcmp(delta, "Hello pet!\\n") == 0);
+
+                    delta[0] = '\\0';
+                    status = aiqa_chat_parse_stream_delta_text("data: [DONE]\\n\\n", delta, sizeof(delta));
+                    assert(status == AIQA_CHAT_ERR_PARSE);
+                    assert(delta[0] == '\\0');
                     return 0;
                 }
                 """

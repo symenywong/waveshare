@@ -42,6 +42,11 @@ aiqa_chat_status_t aiqa_chat_parse_response_text(
     char *out_text,
     size_t out_text_size);
 
+aiqa_chat_status_t aiqa_chat_parse_stream_delta_text(
+    const char *stream_chunk,
+    char *out_text,
+    size_t out_text_size);
+
 aiqa_chat_status_t aiqa_chat_status_from_http_status(int http_status);
 const char *aiqa_chat_status_name(aiqa_chat_status_t status);
 
