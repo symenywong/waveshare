@@ -686,6 +686,7 @@ class CContractTests(unittest.TestCase):
             textwrap.dedent(
                 """
                 #include "aiqa_audio_capture.h"
+                #include "aiqa_audio_capture_hw.h"
                 #include <assert.h>
 
                 int main(void) {
@@ -709,6 +710,25 @@ class CContractTests(unittest.TestCase):
                     config.max_record_seconds = 600;
                     config.max_pcm_bytes = aiqa_audio_pcm_bytes_per_second(&config) * config.max_record_seconds;
                     assert(!aiqa_audio_capture_config_is_safe(&config));
+
+                    aiqa_audio_capture_hw_config_t hw_config = aiqa_audio_capture_hw_default_config();
+                    assert(hw_config.sample_rate_hz == 16000);
+                    assert(hw_config.bits_per_sample == 16);
+                    assert(hw_config.source_channels == 4);
+                    assert(hw_config.output_channels == 1);
+                    assert(hw_config.chunk_frames == 256);
+                    assert(aiqa_audio_capture_hw_config_is_safe(&hw_config));
+
+                    hw_config.source_channels = 2;
+                    assert(!aiqa_audio_capture_hw_config_is_safe(&hw_config));
+
+                    hw_config = aiqa_audio_capture_hw_default_config();
+                    hw_config.mic_gain_db = 60;
+                    assert(!aiqa_audio_capture_hw_config_is_safe(&hw_config));
+
+                    hw_config = aiqa_audio_capture_hw_default_config();
+                    hw_config.chunk_frames = 0;
+                    assert(!aiqa_audio_capture_hw_config_is_safe(&hw_config));
                     return 0;
                 }
                 """

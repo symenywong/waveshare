@@ -179,14 +179,15 @@ Implemented:
 - `PRESS_START`, `PRESS_END`, and `AUDIO_TOO_LONG` event emission.
 - `audio_task` owns recording start/stop commands and logs the capture session
   lifecycle.
+- ES7210 capture bring-up using `esp_codec_dev` and ESP-IDF I2S TDM RX.
+- Runtime PCM diagnostics: captured bytes, mono sample count, and peak level.
 - Host contract tests cover short-press rejection, long-press start, release
   stop, and one-shot timeout behavior.
 
 Not yet implemented:
 
-- Real ES7210 codec initialization.
-- I2S DMA PCM capture into PSRAM.
 - Passing recorded PCM bytes into ASR.
+- Persisting recorded PCM beyond diagnostic chunks.
 
 ## Current ASR Scope
 
@@ -268,7 +269,7 @@ Not yet implemented:
 Not yet implemented:
 
 - AXP2101 register reads / PWR event decoding.
-- ES7210 codec initialization and I2S DMA capture.
+- Passing captured ES7210 PCM into ASR.
 - ES8311 playback and PA pop suppression sequence.
 - Animated pet mood transitions and richer response presentation.
 - Production secret hardening with ESP-IDF NVS encryption:

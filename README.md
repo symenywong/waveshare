@@ -36,6 +36,7 @@ On boot the current firmware prints:
 - BOOT button pressed/released state
 - audio capture budget
 - BOOT long-press PTT event transitions
+- ES7210/I2S PCM capture diagnostics after long-press
 - AMOLED init status and pet expression-page updates
 - NVS provisioning status
 - Wi-Fi/SNTP network task status after provisioning
@@ -53,9 +54,10 @@ namespace is provisioned with Wi-Fi credentials and a chat API key. The AMOLED
 screen shows a readable pet page; without provisioning it should display
 `AI PET`, `SETUP NEEDED`, `NVS CONFIG MISSING`, and `RUN PROVISION TOOL`.
 Long-pressing BOOT now drives the runtime into the `LISTENING` pet state and
-release moves it toward transcription. The actual ES7210/I2S PCM capture driver
-is still staged, so Phase 5 verifies interaction timing and bounded recording
-ownership before wiring real microphone samples into ASR.
+release moves it toward transcription. The ES7210/I2S capture path now starts on
+press, stops on release, and logs PCM byte/sample/peak statistics for microphone
+bring-up. The ASR worker still uses the static Qwen sample until recorded PCM is
+encoded and passed into the ASR request.
 For Phase 6, transcription uses a static public audio URL through Qwen ASR via
 the OpenAI-compatible `chat/completions` endpoint; this proves provider
 selection, TLS/HTTP behavior, and runtime ASR events before microphone PCM is

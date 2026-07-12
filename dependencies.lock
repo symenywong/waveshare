@@ -9,6 +9,16 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 0.5.3
+  espressif/esp_codec_dev:
+    component_hash: 3a1df01ee46d64c55155341bb6f4834db33db7dbd9b637e476e1eab64d01295a
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.4.0
   espressif/esp_lcd_co5300:
     component_hash: 21f84c5c825509ebacbddb379555b49092ae165b3e19f0edfbf6f8eff8aa036d
     dependencies:
@@ -28,8 +38,9 @@ dependencies:
       type: idf
     version: 5.5.2
 direct_dependencies:
+- espressif/esp_codec_dev
 - espressif/esp_lcd_co5300
 - idf
-manifest_hash: 476470fb5e12667bf21e78aa43285cdc25588aed39e8480cda916489d91df5d7
+manifest_hash: e0932effe33327cce821b9cee655c7a9b7eac80bd6204956dcf9487e62a6d3e0
 target: esp32s3
 version: 2.0.0

@@ -2,6 +2,7 @@
 #include "aiqa_config.h"
 #include "aiqa_config_nvs.h"
 #include "aiqa_audio_capture.h"
+#include "aiqa_audio_capture_hw.h"
 #include "aiqa_asr_client.h"
 #include "aiqa_chat_client.h"
 #include "aiqa_net_connect.h"
@@ -10,7 +11,6 @@
 #include "aiqa_runtime_ui.h"
 #include "aiqa_state_machine.h"
 #include "board_wave_175c.h"
-
 #include "esp_check.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -29,13 +29,12 @@ static const char *TAG = "aiqa_runtime";
 #define AIQA_ASR_QUEUE_DEPTH 2
 #define AIQA_TASK_STACK_APP 4096
 #define AIQA_TASK_STACK_UI 6144
-#define AIQA_TASK_STACK_WORKER 4096
+#define AIQA_TASK_STACK_AUDIO 6144
 #define AIQA_TASK_STACK_NET 6144
 #define AIQA_TASK_STACK_CHAT 8192
 #define AIQA_TASK_STACK_ASR 8192
 #define AIQA_TASK_STACK_BUTTON 3072
 #define AIQA_RUNTIME_CHAT_PROMPT_MAX_LEN AIQA_ASR_RESPONSE_TEXT_MAX_LEN
-
 typedef struct {
     aiqa_state_t state;
     aiqa_error_code_t error;
@@ -90,7 +89,6 @@ static aiqa_event_t load_config_event(void)
             .value = (uint32_t)load_ret,
         };
     }
-
     if (!snapshot.namespace_found) {
         ESP_LOGW(TAG, "NVS namespace 'aiqa' is missing; run provisioning before network use");
         return (aiqa_event_t){
@@ -99,7 +97,6 @@ static aiqa_event_t load_config_event(void)
             .value = 0,
         };
     }
-
     if (snapshot.config_status != AIQA_CONFIG_OK) {
         ESP_LOGE(TAG, "Config validation failed: %s",
                  aiqa_config_status_name(snapshot.config_status));
@@ -109,7 +106,6 @@ static aiqa_event_t load_config_event(void)
             .value = (uint32_t)snapshot.config_status,
         };
     }
-
     if (snapshot.secret_status != AIQA_SECRET_OK) {
         ESP_LOGE(TAG, "Secret validation failed: %s",
                  aiqa_secret_status_name(snapshot.secret_status));
@@ -126,10 +122,8 @@ static aiqa_event_t load_config_event(void)
              snapshot.config.stream ? 1 : 0,
              snapshot.config.max_completion_tokens);
     ESP_LOGI(TAG, "Wi-Fi credentials and chat key are present");
-
     s_config_snapshot = snapshot;
     s_config_snapshot_ready = true;
-
     return (aiqa_event_t){
         .type = AIQA_EVENT_CONFIG_READY,
         .error = AIQA_ERROR_NONE,
@@ -164,7 +158,6 @@ static esp_err_t post_chat_prompt(const char *prompt)
     if (prompt == NULL || prompt[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
-
     aiqa_chat_command_t command = {.type = AIQA_CHAT_COMMAND_USER_PROMPT, .prompt = {0}};
     (void)snprintf(command.prompt, sizeof(command.prompt), "%s", prompt);
     return post_chat_command(command);
@@ -197,7 +190,6 @@ static void post_ui_state(aiqa_state_t state, aiqa_error_code_t error)
     if (s_ui_queue == NULL) {
         return;
     }
-
     aiqa_ui_message_t message = {
         .state = state,
         .error = error,
@@ -211,7 +203,6 @@ static void handle_recording_transition(aiqa_transition_t transition)
     if (!transition.accepted || !transition.changed) {
         return;
     }
-
     esp_err_t ret = ESP_OK;
     if (transition.next_state == AIQA_STATE_RECORDING) {
         aiqa_ptt_policy_t policy = aiqa_ptt_default_policy();
@@ -238,7 +229,6 @@ static void handle_asr_transition(aiqa_transition_t transition)
     if (!transition.accepted || !transition.changed || transition.next_state != AIQA_STATE_TRANSCRIBING) {
         return;
     }
-
     esp_err_t ret = post_asr_command((aiqa_asr_command_t){
         .type = AIQA_ASR_COMMAND_STATIC_SAMPLE,
         .audio_ref = AIQA_ASR_STATIC_SAMPLE_URL,
@@ -254,7 +244,6 @@ static void handle_chat_prompt_transition(aiqa_transition_t transition, aiqa_eve
         event.type != AIQA_EVENT_ASR_DONE) {
         return;
     }
-
     esp_err_t ret = post_chat_prompt(s_latest_transcript);
     (void)memset(s_latest_transcript, 0, sizeof(s_latest_transcript));
     if (ret != ESP_OK) {
@@ -278,7 +267,6 @@ esp_err_t aiqa_runtime_post_event_from_isr(aiqa_event_t event, bool *higher_prio
     if (s_app_queue == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
-
     BaseType_t task_woken = pdFALSE;
     if (xQueueSendFromISR(s_app_queue, &event, &task_woken) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
@@ -292,7 +280,6 @@ esp_err_t aiqa_runtime_post_event_from_isr(aiqa_event_t event, bool *higher_prio
 static void app_state_task(void *arg)
 {
     (void)arg;
-
     aiqa_state_machine_t machine;
     aiqa_state_machine_init(&machine);
     post_ui_state(machine.state, machine.last_error);
@@ -306,13 +293,11 @@ static void app_state_task(void *arg)
     if (post_ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to post boot event: %s", esp_err_to_name(post_ret));
     }
-
     while (true) {
         aiqa_event_t event;
         if (xQueueReceive(s_app_queue, &event, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-
         aiqa_transition_t transition = aiqa_state_machine_dispatch(&machine, event);
         if (!transition.accepted) {
             ESP_LOGW(TAG, "Ignored event %s in %s",
@@ -331,7 +316,6 @@ static void app_state_task(void *arg)
             handle_asr_transition(transition);
             handle_chat_prompt_transition(transition, event);
         }
-
         if (event.type == AIQA_EVENT_FACTORY_RESET) {
             esp_err_t erase_ret = aiqa_config_erase_nvs_namespace();
             if (erase_ret != ESP_OK) {
@@ -340,7 +324,6 @@ static void app_state_task(void *arg)
                 ESP_LOGW(TAG, "Factory reset erased NVS namespace 'aiqa'");
             }
         }
-
         if (transition.next_state == AIQA_STATE_CONFIG_CHECK) {
             aiqa_event_t next = load_config_event();
             post_ret = aiqa_runtime_post_event(next);
@@ -384,7 +367,6 @@ static void app_state_task(void *arg)
 static void ui_task(void *arg)
 {
     (void)arg;
-
     bool display_ready = false;
     esp_err_t display_ret = board_wave_175c_display_init();
     if (display_ret == ESP_OK) {
@@ -398,13 +380,11 @@ static void ui_task(void *arg)
     } else {
         ESP_LOGW("aiqa_ui", "LCD init failed; serial UI remains active: %s", esp_err_to_name(display_ret));
     }
-
     while (true) {
         aiqa_ui_message_t message;
         if (xQueueReceive(s_ui_queue, &message, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-
         if (message.error == AIQA_ERROR_NONE) {
             ESP_LOGI("aiqa_ui", "UI state: %s", aiqa_state_name(message.state));
         } else {
@@ -412,7 +392,6 @@ static void ui_task(void *arg)
                      aiqa_state_name(message.state),
                      aiqa_error_name(message.error));
         }
-
         if (display_ready) {
             const board_wave_175c_display_page_t page =
                 aiqa_runtime_ui_page_for_dialogue(message.state, message.error, &message.dialogue);
@@ -428,31 +407,56 @@ static void ui_task(void *arg)
 static void audio_task(void *arg)
 {
     (void)arg;
-    ESP_LOGI("aiqa_audio", "Audio task ready: PTT session owner, ES7210 DMA still staged");
-    bool recording = false;
+    ESP_LOGI("aiqa_audio", "Audio task ready: ES7210 capture owner");
+    const aiqa_audio_capture_hw_config_t config = aiqa_audio_capture_hw_default_config();
+    int16_t samples[AIQA_AUDIO_CAPTURE_CHUNK_FRAMES];
     while (true) {
         aiqa_audio_command_t command;
         if (xQueueReceive(s_audio_queue, &command, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-
-        switch (command.type) {
-        case AIQA_AUDIO_COMMAND_START_RECORDING:
-            if (!recording) {
-                recording = true;
-                ESP_LOGI("aiqa_audio", "PTT recording session started: max=%u ms, PCM driver staged",
-                         (unsigned)command.max_record_ms);
-            }
-            break;
-        case AIQA_AUDIO_COMMAND_STOP_RECORDING:
-            if (recording) {
-                recording = false;
-                ESP_LOGI("aiqa_audio", "PTT recording session stopped; ASR input capture not yet enabled");
-            }
-            break;
-        default:
-            break;
+        if (command.type != AIQA_AUDIO_COMMAND_START_RECORDING) {
+            continue;
         }
+        esp_err_t ret = aiqa_audio_capture_hw_init(&config);
+        if (ret == ESP_OK) {
+            ret = aiqa_audio_capture_hw_start();
+        }
+        if (ret != ESP_OK) {
+            ESP_LOGE("aiqa_audio", "ES7210 recording start failed: %s", esp_err_to_name(ret));
+            continue;
+        }
+        bool recording = true;
+        size_t total_bytes = 0, total_samples = 0;
+        int16_t session_peak = 0;
+        const uint32_t started_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        ESP_LOGI("aiqa_audio", "PTT recording session started: max=%u ms", (unsigned)command.max_record_ms);
+        while (recording) {
+            aiqa_audio_capture_stats_t stats = {0};
+            ret = aiqa_audio_capture_hw_read_mono(samples, config.chunk_frames, &stats);
+            if (ret == ESP_OK) {
+                total_bytes += stats.bytes_read;
+                total_samples += stats.mono_samples;
+                if (stats.peak_abs > session_peak) {
+                    session_peak = stats.peak_abs;
+                }
+            } else {
+                ESP_LOGW("aiqa_audio", "ES7210 read failed: %s", esp_err_to_name(ret));
+            }
+            const uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            if (command.max_record_ms > 0 && now_ms - started_ms >= command.max_record_ms) {
+                recording = false;
+            }
+            aiqa_audio_command_t pending = {0};
+            if (xQueueReceive(s_audio_queue, &pending, 0) == pdTRUE &&
+                pending.type == AIQA_AUDIO_COMMAND_STOP_RECORDING) {
+                recording = false;
+            }
+        }
+        (void)aiqa_audio_capture_hw_stop();
+        (void)memset(samples, 0, sizeof(samples));
+        ESP_LOGI("aiqa_audio", "PTT recording stopped: bytes=%u mono_samples=%u peak=%d",
+                 (unsigned)total_bytes, (unsigned)total_samples, (int)session_peak);
     }
 }
 
@@ -783,7 +787,7 @@ esp_err_t aiqa_runtime_start(void)
 
     if (xTaskCreate(app_state_task, "aiqa_state", AIQA_TASK_STACK_APP, NULL, 8, NULL) != pdPASS ||
         xTaskCreate(ui_task, "aiqa_ui", AIQA_TASK_STACK_UI, NULL, 6, NULL) != pdPASS ||
-        xTaskCreate(audio_task, "aiqa_audio", AIQA_TASK_STACK_WORKER, NULL, 5, NULL) != pdPASS ||
+        xTaskCreate(audio_task, "aiqa_audio", AIQA_TASK_STACK_AUDIO, NULL, 5, NULL) != pdPASS ||
         xTaskCreate(button_task, "aiqa_button", AIQA_TASK_STACK_BUTTON, NULL, 5, NULL) != pdPASS ||
         xTaskCreate(net_task, "aiqa_net", AIQA_TASK_STACK_NET, NULL, 5, NULL) != pdPASS ||
         xTaskCreate(asr_task, "aiqa_asr", AIQA_TASK_STACK_ASR, NULL, 5, NULL) != pdPASS ||

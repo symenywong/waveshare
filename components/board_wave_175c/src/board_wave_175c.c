@@ -1,5 +1,6 @@
 #include "board_wave_175c.h"
 
+#include "board_wave_175c_i2c_bus.h"
 #include "board_wave_175c_pins.h"
 
 #include "driver/gpio.h"
@@ -110,6 +111,16 @@ esp_err_t board_wave_175c_i2c_scan(board_wave_175c_i2c_scan_result_t *result)
 
     result->detected_mask = board_wave_175c_detected_mask_from_addresses(result->addresses, result->address_count);
     result->missing_required_mask = board_wave_175c_missing_required_mask(result->detected_mask);
+    return ESP_OK;
+}
+
+esp_err_t board_wave_175c_i2c_bus_handle(i2c_master_bus_handle_t *out_bus)
+{
+    if (out_bus == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ESP_RETURN_ON_ERROR(ensure_i2c_bus(), TAG, "I2C bus init failed");
+    *out_bus = s_i2c_bus;
     return ESP_OK;
 }
 
