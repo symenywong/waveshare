@@ -206,7 +206,10 @@ Implemented:
   dedicated playback task through pointer-sized FreeRTOS queue items as SSE
   audio arrives, so ES8311 playback can start before the full TTS response has
   finished downloading while keeping queued PCM memory and task stack usage
-  bounded.
+  bounded. The slot pool is sized for roughly two seconds of 24 kHz/16-bit mono
+  PCM jitter and prefers PSRAM allocation.
+- Playback waits briefly for an initial jitter buffer before starting, so
+  provider-side SSE burst gaps are less likely to become audible pauses.
 - The playback queue reserves one extra pointer slot for the stream-ending
   marker so normal queued audio cannot block completion signaling.
 - Playback-side cancellation or queue backpressure can abort the active TTS

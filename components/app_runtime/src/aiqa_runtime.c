@@ -48,8 +48,10 @@ static const char *TAG = "aiqa_runtime";
 #define AIQA_LATENCY_MAX_COMPLETION_TOKENS 256
 #define AIQA_STARTUP_AUDIO_TEST_TONE_HZ 880u
 #define AIQA_STARTUP_AUDIO_TEST_TONE_MS 900u
-#define AIQA_TTS_PLAYBACK_SLOT_COUNT 16
+#define AIQA_TTS_PLAYBACK_SLOT_COUNT 96
 #define AIQA_TTS_PLAYBACK_PLAY_QUEUE_DEPTH (AIQA_TTS_PLAYBACK_SLOT_COUNT + 1u)
+#define AIQA_TTS_PLAYBACK_PREBUFFER_SLOTS 24
+#define AIQA_TTS_PLAYBACK_PREBUFFER_TIMEOUT_MS 900u
 #define AIQA_TTS_PLAYBACK_FINISH_TIMEOUT_MS 30000u
 #define AIQA_TASK_STACK_TTS_PLAYBACK 6144
 typedef struct {
@@ -84,6 +86,7 @@ typedef struct {
     SemaphoreHandle_t done;
     aiqa_tts_playback_slot_t *slots;
     uint32_t generation;
+    volatile bool producer_done;
     esp_err_t status;
     size_t audio_bytes;
     size_t audio_chunks;
@@ -944,13 +947,13 @@ static aiqa_tts_playback_slot_t *allocate_tts_playback_slots(void)
     aiqa_tts_playback_slot_t *slots =
         (aiqa_tts_playback_slot_t *)heap_caps_calloc(AIQA_TTS_PLAYBACK_SLOT_COUNT,
                                                      sizeof(aiqa_tts_playback_slot_t),
-                                                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+                                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (slots != NULL) {
         return slots;
     }
     slots = (aiqa_tts_playback_slot_t *)heap_caps_calloc(AIQA_TTS_PLAYBACK_SLOT_COUNT,
                                                          sizeof(aiqa_tts_playback_slot_t),
-                                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (slots != NULL) {
         return slots;
     }
@@ -969,6 +972,29 @@ static void release_tts_playback_slot(aiqa_tts_playback_context_t *context,
     slot->pcm_bytes = 0;
     if (xQueueSend(context->free_queue, &slot, 0) != pdTRUE) {
         ESP_LOGW("aiqa_tts", "TTS playback free slot queue full");
+    }
+}
+
+static void maybe_wait_for_tts_prebuffer(const aiqa_tts_playback_context_t *context)
+{
+    if (context == NULL || context->play_queue == NULL ||
+        AIQA_TTS_PLAYBACK_PREBUFFER_SLOTS <= 1u) {
+        return;
+    }
+
+    const TickType_t start_tick = xTaskGetTickCount();
+    const TickType_t timeout_ticks = pdMS_TO_TICKS(AIQA_TTS_PLAYBACK_PREBUFFER_TIMEOUT_MS);
+    const UBaseType_t queued_target = AIQA_TTS_PLAYBACK_PREBUFFER_SLOTS - 1u;
+    while (context->status == ESP_OK &&
+           !context->producer_done &&
+           interaction_generation_is_current(context->generation)) {
+        if (uxQueueMessagesWaiting(context->play_queue) >= queued_target) {
+            return;
+        }
+        if ((xTaskGetTickCount() - start_tick) >= timeout_ticks) {
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
@@ -999,6 +1025,13 @@ static void tts_stream_playback_task(void *arg)
         }
 
         if (!started) {
+            maybe_wait_for_tts_prebuffer(context);
+            if (context->status != ESP_OK ||
+                !interaction_generation_is_current(context->generation)) {
+                playback_ret = context->status != ESP_OK ? context->status : ESP_ERR_INVALID_STATE;
+                release_tts_playback_slot(context, slot);
+                break;
+            }
             playback_ret = aiqa_audio_playback_hw_init(&playback_config);
             if (playback_ret == ESP_OK) {
                 playback_ret = aiqa_audio_playback_hw_start();
@@ -1129,6 +1162,7 @@ static void finish_tts_stream_playback(aiqa_tts_playback_context_t *context)
         return;
     }
 
+    context->producer_done = true;
     aiqa_tts_playback_slot_t *final_slot = NULL;
     if (xQueueSend(context->play_queue, &final_slot, pdMS_TO_TICKS(2000)) != pdTRUE) {
         context->status = ESP_ERR_TIMEOUT;
@@ -1183,6 +1217,7 @@ static void speak_pet_answer(const char *answer, uint32_t generation)
         .done = xSemaphoreCreateBinary(),
         .slots = allocate_tts_playback_slots(),
         .generation = generation,
+        .producer_done = false,
         .status = ESP_OK,
         .audio_bytes = 0,
         .audio_chunks = 0,
