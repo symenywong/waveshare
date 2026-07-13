@@ -202,10 +202,13 @@ Implemented:
   does not wait behind a synthetic speech request.
 - Qwen-TTS streaming parser now accepts large SSE audio chunks and treats the
   final empty `audio.data` URL frame as a normal stream ending.
-- Qwen-TTS PCM chunks are split into fixed 1 KB queue items and sent to a
-  dedicated playback task as SSE audio arrives, so ES8311 playback can start
-  before the full TTS response has finished downloading while keeping queued
-  PCM memory bounded.
+- Qwen-TTS PCM chunks are split into a fixed 1 KB slot pool and sent to a
+  dedicated playback task through pointer-sized FreeRTOS queue items as SSE
+  audio arrives, so ES8311 playback can start before the full TTS response has
+  finished downloading while keeping queued PCM memory and task stack usage
+  bounded.
+- The playback queue reserves one extra pointer slot for the stream-ending
+  marker so normal queued audio cannot block completion signaling.
 - Playback-side cancellation or queue backpressure can abort the active TTS
   HTTP stream instead of continuing to decode audio that can no longer be
   played.
