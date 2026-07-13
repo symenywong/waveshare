@@ -50,6 +50,7 @@ typedef struct {
     bool hide_reasoning;
     int max_completion_tokens;
     const char *response_language;
+    const char *conversation_context;
 } aiqa_chat_options_t;
 
 typedef struct {

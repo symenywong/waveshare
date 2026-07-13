@@ -484,6 +484,45 @@ class CContractTests(unittest.TestCase):
             ],
         )
 
+    def test_conversation_memory_keeps_recent_turns_for_chat_context(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_conversation_memory.h"
+                #include <assert.h>
+                #include <string.h>
+
+                int main(void) {
+                    aiqa_conversation_memory_t memory;
+                    aiqa_conversation_memory_init(&memory);
+
+                    char context[AIQA_CONVERSATION_MEMORY_CONTEXT_MAX_LEN] = {0};
+                    assert(!aiqa_conversation_memory_build_context(&memory, context, sizeof(context)));
+                    assert(context[0] == '\\0');
+
+                    assert(aiqa_conversation_memory_add_turn(&memory, "first question", "first answer"));
+                    assert(aiqa_conversation_memory_add_turn(&memory, "second question", "second answer"));
+                    assert(aiqa_conversation_memory_add_turn(&memory, "third question", "third answer"));
+                    assert(aiqa_conversation_memory_add_turn(&memory, "fourth question", "fourth answer"));
+
+                    assert(memory.count == AIQA_CONVERSATION_MEMORY_MAX_TURNS);
+                    assert(aiqa_conversation_memory_build_context(&memory, context, sizeof(context)));
+                    assert(strstr(context, "first question") == 0);
+                    assert(strstr(context, "second question") != 0);
+                    assert(strstr(context, "third answer") != 0);
+                    assert(strstr(context, "fourth question") != 0);
+                    assert(strstr(context, "User: second question") < strstr(context, "User: fourth question"));
+
+                    aiqa_conversation_memory_clear(&memory);
+                    assert(!aiqa_conversation_memory_build_context(&memory, context, sizeof(context)));
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_conversation_memory.c"],
+            ["components/app_core/include"],
+        )
+
     def test_runtime_ui_prefers_dialogue_on_answer_page(self):
         self.compile_and_run(
             textwrap.dedent(
@@ -804,7 +843,20 @@ class CContractTests(unittest.TestCase):
                     assert(strstr(body, "12+28=40") != 0);
                     assert(strstr(body, "sk-") == 0);
 
+                    options.conversation_context = "User: 我的名字是小明\\nPet: 我记住啦";
+                    status = aiqa_chat_build_request_json(
+                        &config,
+                        &options,
+                        "我叫什么名字",
+                        body,
+                        sizeof(body));
+                    assert(status == AIQA_CHAT_OK);
+                    assert(strstr(body, "Recent conversation memory") != 0);
+                    assert(strstr(body, "我的名字是小明") != 0);
+                    assert(strstr(body, "我叫什么名字") != 0);
+
                     options.response_language = aiqa_language_chat_code(AIQA_DIALOGUE_LANGUAGE_ENGLISH);
+                    options.conversation_context = NULL;
                     status = aiqa_chat_build_request_json(
                         &config,
                         &options,

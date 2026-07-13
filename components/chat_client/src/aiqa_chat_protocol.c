@@ -55,13 +55,9 @@ static aiqa_chat_status_t append_raw(char *out, size_t out_size, size_t *pos, co
     return AIQA_CHAT_OK;
 }
 
-static aiqa_chat_status_t append_escaped_json_string(char *out, size_t out_size, size_t *pos, const char *value)
+static aiqa_chat_status_t append_escaped_json_content(char *out, size_t out_size, size_t *pos, const char *value)
 {
-    aiqa_chat_status_t status = append_char(out, out_size, pos, '"');
-    if (status != AIQA_CHAT_OK) {
-        return status;
-    }
-
+    aiqa_chat_status_t status = AIQA_CHAT_OK;
     for (const char *cursor = value; cursor != NULL && *cursor != '\0'; ++cursor) {
         switch (*cursor) {
         case '"':
@@ -88,6 +84,54 @@ static aiqa_chat_status_t append_escaped_json_string(char *out, size_t out_size,
         }
     }
 
+    return AIQA_CHAT_OK;
+}
+
+static aiqa_chat_status_t append_escaped_json_string(char *out, size_t out_size, size_t *pos, const char *value)
+{
+    aiqa_chat_status_t status = append_char(out, out_size, pos, '"');
+    if (status != AIQA_CHAT_OK) {
+        return status;
+    }
+
+    status = append_escaped_json_content(out, out_size, pos, value);
+    if (status != AIQA_CHAT_OK) {
+        return status;
+    }
+
+    return append_char(out, out_size, pos, '"');
+}
+
+static aiqa_chat_status_t append_conversation_context_message(
+    char *out,
+    size_t out_size,
+    size_t *pos,
+    const char *conversation_context)
+{
+    if (conversation_context == NULL || conversation_context[0] == '\0') {
+        return AIQA_CHAT_OK;
+    }
+
+    aiqa_chat_status_t status = append_raw(out, out_size, pos, "},{\"role\":\"system\",\"content\":");
+    if (status != AIQA_CHAT_OK) {
+        return status;
+    }
+    status = append_char(out, out_size, pos, '"');
+    if (status != AIQA_CHAT_OK) {
+        return status;
+    }
+    status = append_escaped_json_content(
+        out,
+        out_size,
+        pos,
+        "Recent conversation memory (oldest to newest; use only when relevant):\n");
+    if (status != AIQA_CHAT_OK) {
+        return status;
+    }
+    status = append_escaped_json_content(out, out_size, pos, conversation_context);
+    if (status != AIQA_CHAT_OK) {
+        return status;
+    }
     return append_char(out, out_size, pos, '"');
 }
 
@@ -180,6 +224,14 @@ aiqa_chat_status_t aiqa_chat_build_request_json(
         return AIQA_CHAT_ERR_BUFFER_TOO_SMALL;
     }
     status = append_escaped_json_string(out_json, out_json_size, &pos, system_prompt);
+    if (status != AIQA_CHAT_OK) {
+        return status;
+    }
+    status = append_conversation_context_message(
+        out_json,
+        out_json_size,
+        &pos,
+        options->conversation_context);
     if (status != AIQA_CHAT_OK) {
         return status;
     }

@@ -241,6 +241,7 @@ static esp_err_t chat_send_request(
     const aiqa_secret_config_t *secrets,
     const char *prompt,
     const char *response_language,
+    const char *conversation_context,
     bool stream,
     aiqa_chat_event_cb_t on_delta,
     void *user_ctx,
@@ -276,6 +277,7 @@ static esp_err_t chat_send_request(
         .hide_reasoning = config->hide_reasoning,
         .max_completion_tokens = config->max_completion_tokens,
         .response_language = response_language,
+        .conversation_context = conversation_context,
     };
     char *request_body = (char *)malloc(AIQA_CHAT_REQUEST_MAX_LEN);
     char *response_body = (char *)malloc(AIQA_CHAT_HTTP_RESPONSE_MAX_LEN);
@@ -418,7 +420,33 @@ esp_err_t aiqa_chat_send_once_with_language(
     const char *response_language,
     aiqa_chat_result_t *result)
 {
-    return chat_send_request(config, secrets, prompt, response_language, false, NULL, NULL, result);
+    return aiqa_chat_send_once_with_context(
+        config,
+        secrets,
+        prompt,
+        response_language,
+        NULL,
+        result);
+}
+
+esp_err_t aiqa_chat_send_once_with_context(
+    const aiqa_config_t *config,
+    const aiqa_secret_config_t *secrets,
+    const char *prompt,
+    const char *response_language,
+    const char *conversation_context,
+    aiqa_chat_result_t *result)
+{
+    return chat_send_request(
+        config,
+        secrets,
+        prompt,
+        response_language,
+        conversation_context,
+        false,
+        NULL,
+        NULL,
+        result);
 }
 
 esp_err_t aiqa_chat_send_streaming(
@@ -448,5 +476,35 @@ esp_err_t aiqa_chat_send_streaming_with_language(
     void *user_ctx,
     aiqa_chat_result_t *result)
 {
-    return chat_send_request(config, secrets, prompt, response_language, true, on_delta, user_ctx, result);
+    return aiqa_chat_send_streaming_with_context(
+        config,
+        secrets,
+        prompt,
+        response_language,
+        NULL,
+        on_delta,
+        user_ctx,
+        result);
+}
+
+esp_err_t aiqa_chat_send_streaming_with_context(
+    const aiqa_config_t *config,
+    const aiqa_secret_config_t *secrets,
+    const char *prompt,
+    const char *response_language,
+    const char *conversation_context,
+    aiqa_chat_event_cb_t on_delta,
+    void *user_ctx,
+    aiqa_chat_result_t *result)
+{
+    return chat_send_request(
+        config,
+        secrets,
+        prompt,
+        response_language,
+        conversation_context,
+        true,
+        on_delta,
+        user_ctx,
+        result);
 }

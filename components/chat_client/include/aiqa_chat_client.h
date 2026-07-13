@@ -30,6 +30,14 @@ esp_err_t aiqa_chat_send_once_with_language(
     const char *response_language,
     aiqa_chat_result_t *result);
 
+esp_err_t aiqa_chat_send_once_with_context(
+    const aiqa_config_t *config,
+    const aiqa_secret_config_t *secrets,
+    const char *prompt,
+    const char *response_language,
+    const char *conversation_context,
+    aiqa_chat_result_t *result);
+
 esp_err_t aiqa_chat_send_streaming(
     const aiqa_config_t *config,
     const aiqa_secret_config_t *secrets,
@@ -43,6 +51,16 @@ esp_err_t aiqa_chat_send_streaming_with_language(
     const aiqa_secret_config_t *secrets,
     const char *prompt,
     const char *response_language,
+    aiqa_chat_event_cb_t on_delta,
+    void *user_ctx,
+    aiqa_chat_result_t *result);
+
+esp_err_t aiqa_chat_send_streaming_with_context(
+    const aiqa_config_t *config,
+    const aiqa_secret_config_t *secrets,
+    const char *prompt,
+    const char *response_language,
+    const char *conversation_context,
     aiqa_chat_event_cb_t on_delta,
     void *user_ctx,
     aiqa_chat_result_t *result);

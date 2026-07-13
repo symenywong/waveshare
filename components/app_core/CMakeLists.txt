@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS
+        "src/aiqa_conversation_memory.c"
         "src/aiqa_dialogue_view.c"
         "src/aiqa_hardening.c"
         "src/aiqa_language.c"

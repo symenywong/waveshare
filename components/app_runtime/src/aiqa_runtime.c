@@ -1,6 +1,7 @@
 #include "aiqa_runtime.h"
 #include "aiqa_config.h"
 #include "aiqa_config_nvs.h"
+#include "aiqa_conversation_memory.h"
 #include "aiqa_audio_capture.h"
 #include "aiqa_audio_capture_hw.h"
 #include "aiqa_audio_playback.h"
@@ -111,6 +112,7 @@ static uint32_t s_interaction_generation = 1;
 static char s_latest_transcript[AIQA_ASR_RESPONSE_TEXT_MAX_LEN];
 static char s_local_pet_reply[AIQA_CHAT_RESPONSE_TEXT_MAX_LEN];
 static aiqa_dialogue_view_t s_latest_dialogue;
+static aiqa_conversation_memory_t s_conversation_memory;
 static aiqa_runtime_recording_t s_recording;
 
 static void secure_zero_bytes(void *data, size_t length)
@@ -1129,6 +1131,15 @@ static void chat_task(void *arg)
             continue;
         }
 
+        char prompt_snapshot[AIQA_RUNTIME_CHAT_PROMPT_MAX_LEN] = {0};
+        (void)snprintf(prompt_snapshot, sizeof(prompt_snapshot), "%s", command.prompt);
+        char conversation_context[AIQA_CONVERSATION_MEMORY_CONTEXT_MAX_LEN] = {0};
+        const bool has_conversation_context =
+            aiqa_conversation_memory_build_context(
+                &s_conversation_memory,
+                conversation_context,
+                sizeof(conversation_context));
+
         (void)aiqa_runtime_post_event((aiqa_event_t){
             .type = AIQA_EVENT_CHAT_STARTED,
             .error = AIQA_ERROR_NONE,
@@ -1147,29 +1158,37 @@ static void chat_task(void *arg)
                                 chat_caps->supports_chat_stream;
         const char *response_language = aiqa_language_chat_code(s_dialogue_language);
         esp_err_t chat_ret = use_stream
-                                 ? aiqa_chat_send_streaming_with_language(
+                                 ? aiqa_chat_send_streaming_with_context(
                                        &s_config_snapshot.config,
                                        &s_config_snapshot.secrets,
                                        command.prompt,
                                        response_language,
+                                       has_conversation_context ? conversation_context : NULL,
                                        chat_stream_delta_callback,
                                        &stream_context,
                                        &result)
-                                 : aiqa_chat_send_once_with_language(
+                                 : aiqa_chat_send_once_with_context(
                                        &s_config_snapshot.config,
                                        &s_config_snapshot.secrets,
                                        command.prompt,
                                        response_language,
+                                       has_conversation_context ? conversation_context : NULL,
                                        &result);
         (void)memset(command.prompt, 0, sizeof(command.prompt));
         if (!interaction_generation_is_current(command.generation)) {
             ESP_LOGI("aiqa_chat", "Dropping stale chat result generation=%u",
                      (unsigned)command.generation);
             (void)memset(result.text, 0, sizeof(result.text));
+            (void)memset(prompt_snapshot, 0, sizeof(prompt_snapshot));
+            (void)memset(conversation_context, 0, sizeof(conversation_context));
             continue;
         }
         if (result.status == AIQA_CHAT_OK) {
             aiqa_dialogue_view_set_pet(&s_latest_dialogue, result.text);
+            if (aiqa_conversation_memory_add_turn(&s_conversation_memory, prompt_snapshot, result.text)) {
+                ESP_LOGI("aiqa_memory", "Stored conversation turn: count=%u",
+                         (unsigned)s_conversation_memory.count);
+            }
             ESP_LOGI("aiqa_chat", "Chat answer ready: %u bytes", (unsigned)strlen(result.text));
         }
 
@@ -1182,6 +1201,8 @@ static void chat_task(void *arg)
         if (result.status == AIQA_CHAT_OK) {
             speak_pet_answer(result.text, command.generation);
         }
+        (void)memset(prompt_snapshot, 0, sizeof(prompt_snapshot));
+        (void)memset(conversation_context, 0, sizeof(conversation_context));
         (void)memset(result.text, 0, sizeof(result.text));
     }
 }
@@ -1191,6 +1212,7 @@ esp_err_t aiqa_runtime_start(void)
     s_interaction_generation = 1;
     s_dialogue_language = aiqa_language_default();
     s_pending_local_pet_reply = false;
+    aiqa_conversation_memory_init(&s_conversation_memory);
     (void)memset(s_local_pet_reply, 0, sizeof(s_local_pet_reply));
 
     ESP_RETURN_ON_ERROR(init_nvs(), TAG, "NVS init failed");

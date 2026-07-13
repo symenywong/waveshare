@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define AIQA_CHAT_ENDPOINT_MAX_LEN 224
-#define AIQA_CHAT_REQUEST_MAX_LEN 2048
+#define AIQA_CHAT_REQUEST_MAX_LEN 4096
 #define AIQA_CHAT_RESPONSE_TEXT_MAX_LEN 512
 
 typedef enum {
