@@ -453,8 +453,8 @@ class CContractTests(unittest.TestCase):
                     aiqa_dialogue_view_set_user(&view, "hello tiny pet, please explain rain");
                     aiqa_dialogue_view_set_pet(&view, "Rain is cloud water falling back down.");
                     assert(view.has_dialogue);
-                    assert(strcmp(view.user_line, "YOU HELLO TINY PET") == 0);
-                    assert(strcmp(view.pet_line, "PET RAIN IS CLOUD WATER") == 0);
+                    assert(strcmp(view.user_line, "IN HELLO TINY PET") == 0);
+                    assert(strcmp(view.pet_line, "OUT RAIN IS CLOUD WATER") == 0);
                     assert(view.pet_emotion == AIQA_DIALOGUE_EMOTION_NONE);
 
                     board_wave_175c_display_rect_t rect = {0};
@@ -463,12 +463,12 @@ class CContractTests(unittest.TestCase):
 
                     aiqa_dialogue_view_set_user(&view, "今天天气不错");
                     aiqa_dialogue_view_set_pet(&view, "好的，我听到了");
-                    assert(strcmp(view.user_line, "YOU VOICE RECEIVED") == 0);
-                    assert(strcmp(view.pet_line, "PET ANSWER READY") == 0);
+                    assert(strcmp(view.user_line, "IN VOICE") == 0);
+                    assert(strcmp(view.pet_line, "OUT READY") == 0);
                     assert(view.pet_emotion == AIQA_DIALOGUE_EMOTION_NONE);
 
                     aiqa_dialogue_view_set_pet(&view, "我现在很开心");
-                    assert(strcmp(view.pet_line, "PET ANSWER READY") == 0);
+                    assert(strcmp(view.pet_line, "OUT READY") == 0);
                     assert(view.pet_emotion == AIQA_DIALOGUE_EMOTION_HAPPY);
                     return 0;
                 }
@@ -541,15 +541,23 @@ class CContractTests(unittest.TestCase):
                         AIQA_STATE_IDLE_WITH_RESULT,
                         AIQA_ERROR_NONE,
                         &dialogue);
-                    assert(strcmp(page.status, "PET SAYS") == 0);
-                    assert(strcmp(page.detail, "PET HAPPY TO HELP") == 0);
-                    assert(strcmp(page.hint, "YOU HELLO PET") == 0);
+                    assert(strcmp(page.title, "PET") == 0);
+                    assert(strcmp(page.status, "SPEAK") == 0);
+                    assert(strcmp(page.detail, "OUT HAPPY TO HELP") == 0);
+                    assert(strcmp(page.hint, "IN HELLO PET") == 0);
                     assert(!page.is_error);
 
                     page = aiqa_runtime_ui_page_for_dialogue(AIQA_STATE_THINKING, AIQA_ERROR_NONE, &dialogue);
-                    assert(strcmp(page.status, "PET TYPING") == 0);
-                    assert(strcmp(page.detail, "PET HAPPY TO HELP") == 0);
-                    assert(strcmp(page.hint, "YOU HELLO PET") == 0);
+                    assert(strcmp(page.status, "THINK") == 0);
+                    assert(strcmp(page.detail, "OUT HAPPY TO HELP") == 0);
+                    assert(strcmp(page.hint, "IN HELLO PET") == 0);
+
+                    aiqa_dialogue_view_clear(&dialogue);
+                    aiqa_dialogue_view_set_user(&dialogue, "what time is it");
+                    page = aiqa_runtime_ui_page_for_dialogue(AIQA_STATE_THINKING, AIQA_ERROR_NONE, &dialogue);
+                    assert(strcmp(page.status, "THINK") == 0);
+                    assert(strcmp(page.detail, "OUT WAIT") == 0);
+                    assert(strcmp(page.hint, "IN WHAT TIME IS IT") == 0);
                     return 0;
                 }
                 """
@@ -572,10 +580,13 @@ class CContractTests(unittest.TestCase):
                 #include "aiqa_runtime_ui.h"
                 #include "aiqa_dialogue_view.h"
                 #include <assert.h>
+                #include <string.h>
 
                 int main(void) {
                     board_wave_175c_display_page_t page =
                         aiqa_runtime_ui_page_for(AIQA_STATE_IDLE, AIQA_ERROR_NONE);
+                    assert(strcmp(page.status, "READY") == 0);
+                    assert(strcmp(page.hint, "HOLD BOOT") == 0);
                     assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_IDLE);
 
                     page = aiqa_runtime_ui_page_for(AIQA_STATE_RECORDING, AIQA_ERROR_NONE);
@@ -693,12 +704,13 @@ class CContractTests(unittest.TestCase):
                 int main(void) {
                     board_wave_175c_display_page_t page =
                         aiqa_runtime_ui_page_for(AIQA_STATE_ERROR, AIQA_ERROR_ASR_FAILED);
-                    assert(strcmp(page.status, "ASR FAILED") == 0);
-                    assert(strcmp(page.hint, "LONG PRESS RETRY") == 0);
+                    assert(strcmp(page.status, "ASR") == 0);
+                    assert(strcmp(page.hint, "RETRY") == 0);
                     assert(page.is_error);
 
                     page = aiqa_runtime_ui_page_for(AIQA_STATE_ERROR, AIQA_ERROR_CONFIG_MISSING);
-                    assert(strcmp(page.hint, "RUN PROVISION TOOL") == 0);
+                    assert(strcmp(page.status, "SETUP") == 0);
+                    assert(strcmp(page.hint, "PAIR") == 0);
                     return 0;
                 }
                 """

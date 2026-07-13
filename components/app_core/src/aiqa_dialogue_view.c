@@ -145,7 +145,7 @@ static void write_prefixed_line(
             out[pos++] = *cursor;
         }
     }
-    if (pos > 0 && out[pos - 1] == ' ') {
+    while (pos > 0 && (out[pos - 1] == ' ' || out[pos - 1] == ',' || out[pos - 1] == '.')) {
         --pos;
     }
     out[pos] = '\0';
@@ -164,7 +164,7 @@ void aiqa_dialogue_view_set_user(aiqa_dialogue_view_t *view, const char *text)
     if (view == 0) {
         return;
     }
-    write_prefixed_line(view->user_line, sizeof(view->user_line), "YOU ", "YOU VOICE RECEIVED", text);
+    write_prefixed_line(view->user_line, sizeof(view->user_line), "IN ", "IN VOICE", text);
     view->has_dialogue = true;
 }
 
@@ -174,6 +174,6 @@ void aiqa_dialogue_view_set_pet(aiqa_dialogue_view_t *view, const char *text)
         return;
     }
     view->pet_emotion = detect_pet_emotion(text);
-    write_prefixed_line(view->pet_line, sizeof(view->pet_line), "PET ", "PET ANSWER READY", text);
+    write_prefixed_line(view->pet_line, sizeof(view->pet_line), "OUT ", "OUT READY", text);
     view->has_dialogue = true;
 }

@@ -31,30 +31,42 @@ static board_wave_175c_pet_expression_t ui_expression_for_dialogue_emotion(
     }
 }
 
+static bool ui_has_active_error(aiqa_error_code_t error)
+{
+    return error != AIQA_ERROR_NONE && error != AIQA_ERROR_CANCELLED;
+}
+
+static bool ui_marks_error(aiqa_error_code_t error)
+{
+    return ui_has_active_error(error) && error != AIQA_ERROR_CONFIG_MISSING;
+}
+
 static const char *ui_status_for(aiqa_state_t state, aiqa_error_code_t error)
 {
-    if (error != AIQA_ERROR_NONE) {
+    if (ui_has_active_error(error)) {
         switch (error) {
         case AIQA_ERROR_CONFIG_MISSING:
-            return "SETUP NEEDED";
+            return "SETUP";
         case AIQA_ERROR_CONFIG_CORRUPT:
-            return "CONFIG ERROR";
+            return "CONFIG";
         case AIQA_ERROR_NETWORK_FAILED:
-            return "NETWORK FAILED";
+            return "WIFI";
         case AIQA_ERROR_AUTH_FAILED:
-            return "AUTH FAILED";
+            return "AUTH";
         case AIQA_ERROR_TLS_FAILED:
-            return "TLS FAILED";
+            return "TLS";
         case AIQA_ERROR_CERT_TIME_INVALID:
-            return "TIME INVALID";
+            return "TIME";
         case AIQA_ERROR_RATE_LIMITED:
-            return "RATE LIMITED";
+            return "WAIT";
+        case AIQA_ERROR_PROVIDER_UNSUPPORTED:
+            return "MODEL";
         case AIQA_ERROR_AUDIO_TOO_LONG:
-            return "AUDIO TOO LONG";
+            return "TOO LONG";
         case AIQA_ERROR_ASR_FAILED:
-            return "ASR FAILED";
+            return "ASR";
         case AIQA_ERROR_CHAT_FAILED:
-            return "CHAT FAILED";
+            return "CHAT";
         case AIQA_ERROR_TIMEOUT:
             return "TIMEOUT";
         default:
@@ -64,23 +76,24 @@ static const char *ui_status_for(aiqa_state_t state, aiqa_error_code_t error)
 
     switch (state) {
     case AIQA_STATE_BOOT:
-        return "WAKING UP";
+        return "BOOT";
     case AIQA_STATE_CONFIG_CHECK:
-        return "CONFIG CHECK";
+        return "CONFIG";
     case AIQA_STATE_NETWORK_CONNECTING:
-        return "CONNECTING";
+        return "WIFI";
     case AIQA_STATE_IDLE:
         return "READY";
     case AIQA_STATE_IDLE_WITH_RESULT:
-        return "ANSWER READY";
+        return "SPEAK";
     case AIQA_STATE_RECORDING:
-        return "LISTENING";
+        return "LISTEN";
     case AIQA_STATE_TRANSCRIBING:
-        return "TRANSCRIBING";
     case AIQA_STATE_ASR_JOB_PENDING:
-        return "ASR PENDING";
+        return "TEXT";
     case AIQA_STATE_THINKING:
-        return "THINKING";
+        return "THINK";
+    case AIQA_STATE_ERROR:
+        return "READY";
     default:
         return "UNKNOWN";
     }
@@ -88,88 +101,104 @@ static const char *ui_status_for(aiqa_state_t state, aiqa_error_code_t error)
 
 static const char *ui_detail_for(aiqa_state_t state, aiqa_error_code_t error)
 {
-    if (error != AIQA_ERROR_NONE) {
+    if (ui_has_active_error(error)) {
         switch (error) {
         case AIQA_ERROR_CONFIG_MISSING:
-            return "NVS CONFIG MISSING";
+            return "PAIR";
         case AIQA_ERROR_CONFIG_CORRUPT:
-            return "CHECK PROVISION DATA";
+            return "PAIR";
         case AIQA_ERROR_NETWORK_FAILED:
-            return "CHECK WIFI OR TIME";
+            return "WIFI";
         case AIQA_ERROR_AUTH_FAILED:
-            return "CHECK MODEL API KEY";
+            return "KEY";
         case AIQA_ERROR_TLS_FAILED:
         case AIQA_ERROR_CERT_TIME_INVALID:
-            return "CHECK TLS CLOCK";
+            return "CLOCK";
         case AIQA_ERROR_RATE_LIMITED:
-            return "MODEL RATE LIMITED";
+            return "WAIT";
+        case AIQA_ERROR_PROVIDER_UNSUPPORTED:
+            return "MODEL";
         case AIQA_ERROR_AUDIO_TOO_LONG:
-            return "RECORDING TOO LONG";
+            return "SHORTER";
         case AIQA_ERROR_ASR_FAILED:
-            return "SPEECH JOB FAILED";
+            return "VOICE";
         case AIQA_ERROR_CHAT_FAILED:
-            return "CHAT REQUEST FAILED";
+            return "MODEL";
         case AIQA_ERROR_TIMEOUT:
-            return "OPERATION TIMEOUT";
+            return "RETRY";
         default:
-            return "SEE SERIAL LOG";
+            return NULL;
         }
     }
 
     switch (state) {
     case AIQA_STATE_BOOT:
-        return "PET IS WAKING";
+        return NULL;
     case AIQA_STATE_CONFIG_CHECK:
-        return "READING DEVICE CONFIG";
+        return NULL;
     case AIQA_STATE_NETWORK_CONNECTING:
-        return "JOINING WIFI";
+        return "CONNECT";
     case AIQA_STATE_IDLE:
-        return "HOLD BUTTON TO CHAT";
+        return NULL;
     case AIQA_STATE_RECORDING:
-        return "SPEAK NOW";
+        return "IN VOICE";
     case AIQA_STATE_TRANSCRIBING:
     case AIQA_STATE_ASR_JOB_PENDING:
-        return "VOICE TO TEXT";
+        return "IN TEXT";
     case AIQA_STATE_THINKING:
-        return "ASKING ONLINE MODEL";
+        return "OUT WAIT";
     case AIQA_STATE_IDLE_WITH_RESULT:
-        return "ANSWER COMPLETE";
+        return "OUT READY";
     default:
-        return "SYSTEM READY";
+        return NULL;
     }
 }
 
 static const char *ui_hint_for(aiqa_state_t state, aiqa_error_code_t error)
 {
     if (error == AIQA_ERROR_CONFIG_MISSING) {
-        return "RUN PROVISION TOOL";
+        return "PAIR";
     }
     if (error == AIQA_ERROR_AUDIO_TOO_LONG ||
         error == AIQA_ERROR_ASR_FAILED ||
         error == AIQA_ERROR_CHAT_FAILED ||
         error == AIQA_ERROR_TIMEOUT) {
-        return "LONG PRESS RETRY";
+        return "RETRY";
     }
-    if (error != AIQA_ERROR_NONE) {
-        return "SEE USB SERIAL LOG";
+    if (error == AIQA_ERROR_NETWORK_FAILED) {
+        return "WIFI";
+    }
+    if (error == AIQA_ERROR_AUTH_FAILED ||
+        error == AIQA_ERROR_PROVIDER_UNSUPPORTED) {
+        return "KEY";
+    }
+    if (error == AIQA_ERROR_TLS_FAILED ||
+        error == AIQA_ERROR_CERT_TIME_INVALID) {
+        return "CLOCK";
+    }
+    if (error == AIQA_ERROR_RATE_LIMITED) {
+        return "WAIT";
+    }
+    if (ui_has_active_error(error)) {
+        return NULL;
     }
 
     switch (state) {
     case AIQA_STATE_IDLE:
     case AIQA_STATE_IDLE_WITH_RESULT:
-        return "LONG PRESS BOOT";
+        return "HOLD BOOT";
     case AIQA_STATE_RECORDING:
-        return "RELEASE TO SEND";
+        return "RELEASE";
     case AIQA_STATE_NETWORK_CONNECTING:
-        return "WAIT FOR NETWORK";
+        return "WAIT";
     default:
-        return "AI PET COMPANION";
+        return NULL;
     }
 }
 
 static uint16_t ui_accent_for(aiqa_state_t state, aiqa_error_code_t error)
 {
-    if (error != AIQA_ERROR_NONE) {
+    if (ui_has_active_error(error)) {
         return 0xFD20;
     }
 
@@ -196,7 +225,7 @@ static uint16_t ui_accent_for(aiqa_state_t state, aiqa_error_code_t error)
 
 static board_wave_175c_pet_expression_t ui_expression_for(aiqa_state_t state, aiqa_error_code_t error)
 {
-    if (error != AIQA_ERROR_NONE) {
+    if (ui_has_active_error(error)) {
         switch (error) {
         case AIQA_ERROR_CONFIG_MISSING:
             return BOARD_WAVE_175C_PET_EXPRESSION_SHY;
@@ -286,26 +315,23 @@ board_wave_175c_display_page_t aiqa_runtime_ui_page_for_dialogue(
     aiqa_error_code_t error,
     const aiqa_dialogue_view_t *dialogue)
 {
-    const bool has_dialogue = error == AIQA_ERROR_NONE &&
-                              dialogue != NULL &&
-                              dialogue->has_dialogue &&
-                              dialogue->pet_line[0] != '\0';
-    const bool show_answer_dialogue = has_dialogue && state == AIQA_STATE_IDLE_WITH_RESULT;
-    const bool show_stream_dialogue = has_dialogue && state == AIQA_STATE_THINKING;
-    const bool show_dialogue = show_answer_dialogue || show_stream_dialogue;
+    const bool can_show_dialogue = error == AIQA_ERROR_NONE &&
+                                   dialogue != NULL &&
+                                   dialogue->has_dialogue;
+    const bool has_user_line = can_show_dialogue && dialogue->user_line[0] != '\0';
+    const bool has_pet_line = can_show_dialogue && dialogue->pet_line[0] != '\0';
+    const bool show_answer_expression = has_pet_line && state == AIQA_STATE_IDLE_WITH_RESULT;
     board_wave_175c_pet_expression_t expression = ui_expression_for(state, error);
-    if (show_answer_dialogue) {
+    if (show_answer_expression) {
         expression = ui_dialogue_expression_for(dialogue);
     }
     return (board_wave_175c_display_page_t){
-        .title = "AI PET",
-        .status = show_stream_dialogue ? "PET TYPING" : (show_dialogue ? "PET SAYS" : ui_status_for(state, error)),
-        .detail = show_dialogue ? dialogue->pet_line : ui_detail_for(state, error),
-        .hint = show_dialogue && dialogue->user_line[0] != '\0'
-                    ? dialogue->user_line
-                    : ui_hint_for(state, error),
+        .title = "PET",
+        .status = ui_status_for(state, error),
+        .detail = has_pet_line ? dialogue->pet_line : ui_detail_for(state, error),
+        .hint = has_user_line ? dialogue->user_line : ui_hint_for(state, error),
         .accent_rgb565 = ui_accent_for(state, error),
-        .is_error = error != AIQA_ERROR_NONE && error != AIQA_ERROR_CONFIG_MISSING,
+        .is_error = ui_marks_error(error),
         .expression = expression,
     };
 }
