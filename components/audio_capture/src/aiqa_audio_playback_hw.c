@@ -116,13 +116,21 @@ esp_err_t aiqa_audio_playback_hw_start(void)
         .sample_rate = s_config.sample_rate_hz,
         .mclk_multiple = 0,
     };
-    ESP_RETURN_ON_ERROR(codec_status_to_esp(esp_codec_dev_open(s_codec, &sample_config)),
-                        TAG,
-                        "ES8311 open failed");
-    ESP_RETURN_ON_ERROR(codec_status_to_esp(esp_codec_dev_set_out_vol(s_codec, s_config.volume_percent)),
-                        TAG,
-                        "ES8311 volume set failed");
-    ESP_RETURN_ON_ERROR(board_wave_175c_set_pa_enabled(true), TAG, "PA enable failed");
+    esp_err_t ret = codec_status_to_esp(esp_codec_dev_open(s_codec, &sample_config));
+    ESP_RETURN_ON_ERROR(ret, TAG, "ES8311 open failed");
+    ret = codec_status_to_esp(esp_codec_dev_set_out_vol(s_codec, s_config.volume_percent));
+    if (ret != ESP_OK) {
+        (void)esp_codec_dev_close(s_codec);
+        ESP_LOGE(TAG, "ES8311 volume set failed");
+        return ret;
+    }
+    ret = board_wave_175c_set_pa_enabled(true);
+    if (ret != ESP_OK) {
+        (void)board_wave_175c_set_pa_enabled(false);
+        (void)esp_codec_dev_close(s_codec);
+        ESP_LOGE(TAG, "PA enable failed");
+        return ret;
+    }
     s_started = true;
     return ESP_OK;
 }

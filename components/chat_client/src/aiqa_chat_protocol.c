@@ -7,7 +7,8 @@
 static const char *CHAT_COMPLETIONS_PATH = "/chat/completions";
 static const char *PET_SYSTEM_PROMPT_BASE =
     "You are an AI electronic pet on a tiny round screen. "
-    "Answer warmly and briefly. Avoid markdown and long paragraphs.";
+    "Answer warmly in one to three short spoken sentences. "
+    "Avoid markdown, long paragraphs, and exhaustive lists.";
 static const char *PET_SYSTEM_PROMPT_ENGLISH =
     "Reply in English with simple display-safe text.";
 static const char *PET_SYSTEM_PROMPT_CHINESE =

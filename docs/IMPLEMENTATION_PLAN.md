@@ -135,7 +135,9 @@ Implemented:
 - Request JSON builder that keeps Authorization secrets out of request-body
   tests and logs.
 - Provider-specific chat request options:
-  - DashScope/Qwen uses `max_tokens` and `enable_thinking`.
+- DashScope/Qwen uses `max_tokens` and `enable_thinking`.
+- Runtime clamps voice chat replies to 256 completion tokens to reduce
+  end-to-end spoken-response latency.
   - MiniMax uses `max_completion_tokens` and `reasoning_split`.
 - ESP-IDF `esp_http_client` transport with certificate bundle attachment.
 - HTTP/auth/rate-limit/timeout/provider failures mapped back into runtime
@@ -196,12 +198,17 @@ Implemented:
 - Runtime PCM diagnostics: captured bytes, mono sample count, PCM bytes, and peak level.
 - Recorded PCM handoff to ASR as a WAV data URI after PTT release.
 - Startup ES8311+PA playback self-test tone after Wi-Fi reaches `IDLE`.
-- Startup Qwen-TTS online self-test routed through the same playback path as
-  pet replies.
+- Startup online Qwen-TTS self-test is skipped so the first user interaction
+  does not wait behind a synthetic speech request.
 - Qwen-TTS streaming parser now accepts large SSE audio chunks and treats the
   final empty `audio.data` URL frame as a normal stream ending.
-- Qwen-TTS PCM is buffered in PSRAM before ES8311 playback, avoiding playback
-  gaps caused by variable online SSE chunk arrival timing.
+- Qwen-TTS PCM chunks are split into fixed 1 KB queue items and sent to a
+  dedicated playback task as SSE audio arrives, so ES8311 playback can start
+  before the full TTS response has finished downloading while keeping queued
+  PCM memory bounded.
+- Playback-side cancellation or queue backpressure can abort the active TTS
+  HTTP stream instead of continuing to decode audio that can no longer be
+  played.
 - Host contract tests cover short-press rejection, long-press start, release
   stop, and one-shot timeout behavior.
 

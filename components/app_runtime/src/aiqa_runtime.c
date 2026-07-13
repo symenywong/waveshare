@@ -16,7 +16,6 @@
 #include "aiqa_runtime_recording.h"
 #include "aiqa_runtime_ui.h"
 #include "aiqa_state_machine.h"
-#include "aiqa_tts_pcm_buffer.h"
 #include "aiqa_tts_client.h"
 #include "board_wave_175c.h"
 #include "esp_check.h"
@@ -25,6 +24,7 @@
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "freertos/projdefs.h"
 #include <stdio.h>
@@ -45,10 +45,12 @@ static const char *TAG = "aiqa_runtime";
 #define AIQA_TASK_STACK_ASR 8192
 #define AIQA_TASK_STACK_BUTTON 3072
 #define AIQA_RUNTIME_CHAT_PROMPT_MAX_LEN AIQA_ASR_RESPONSE_TEXT_MAX_LEN
+#define AIQA_LATENCY_MAX_COMPLETION_TOKENS 256
 #define AIQA_STARTUP_AUDIO_TEST_TONE_HZ 880u
 #define AIQA_STARTUP_AUDIO_TEST_TONE_MS 900u
-#define AIQA_STARTUP_TTS_SELF_TEST_TEXT "你好，我醒啦"
-#define AIQA_TTS_BUFFERED_PCM_MAX_BYTES (960000u)
+#define AIQA_TTS_PLAYBACK_QUEUE_DEPTH 16
+#define AIQA_TTS_PLAYBACK_FINISH_TIMEOUT_MS 30000u
+#define AIQA_TASK_STACK_TTS_PLAYBACK 4096
 typedef struct {
     aiqa_state_t state;
     aiqa_error_code_t error;
@@ -60,7 +62,6 @@ typedef struct {
 } aiqa_net_command_t;
 typedef enum {
     AIQA_CHAT_COMMAND_USER_PROMPT = 0,
-    AIQA_CHAT_COMMAND_TTS_SELF_TEST,
     AIQA_CHAT_COMMAND_LOCAL_PET_REPLY,
 } aiqa_chat_command_type_t;
 typedef struct {
@@ -73,10 +74,18 @@ typedef struct {
     char answer[AIQA_CHAT_RESPONSE_TEXT_MAX_LEN];
 } aiqa_chat_stream_ui_context_t;
 typedef struct {
-    aiqa_tts_pcm_buffer_t *buffer;
+    uint8_t pcm[AIQA_AUDIO_PLAYBACK_CHUNK_BYTES];
+    size_t pcm_bytes;
+    bool final;
+} aiqa_tts_playback_item_t;
+typedef struct {
+    QueueHandle_t queue;
+    SemaphoreHandle_t done;
+    uint32_t generation;
     esp_err_t status;
     size_t audio_bytes;
     size_t audio_chunks;
+    size_t played_bytes;
 } aiqa_tts_playback_context_t;
 typedef enum {
     AIQA_AUDIO_COMMAND_START_RECORDING = 0,
@@ -242,6 +251,14 @@ static aiqa_event_t load_config_event(void)
         };
     }
 
+    if (snapshot.config.max_completion_tokens > AIQA_LATENCY_MAX_COMPLETION_TOKENS) {
+        ESP_LOGI(TAG,
+                 "Clamping chat max_tokens from %d to %d for voice latency",
+                 snapshot.config.max_completion_tokens,
+                 AIQA_LATENCY_MAX_COMPLETION_TOKENS);
+        snapshot.config.max_completion_tokens = AIQA_LATENCY_MAX_COMPLETION_TOKENS;
+    }
+
     ESP_LOGI(TAG, "Loaded provider=%s model=%s stream=%d max_tokens=%d",
              snapshot.config.active_provider,
              snapshot.config.model,
@@ -290,20 +307,6 @@ static esp_err_t post_chat_prompt(const char *prompt)
         .prompt = {0},
     };
     (void)snprintf(command.prompt, sizeof(command.prompt), "%s", prompt);
-    return post_chat_command(command);
-}
-
-static esp_err_t post_tts_self_test(const char *text)
-{
-    if (text == NULL || text[0] == '\0') {
-        return ESP_ERR_INVALID_ARG;
-    }
-    aiqa_chat_command_t command = {
-        .type = AIQA_CHAT_COMMAND_TTS_SELF_TEST,
-        .generation = current_interaction_generation(),
-        .prompt = {0},
-    };
-    (void)snprintf(command.prompt, sizeof(command.prompt), "%s", text);
     return post_chat_command(command);
 }
 
@@ -373,10 +376,7 @@ static void maybe_run_startup_audio_test(aiqa_transition_t transition)
         return;
     }
     ESP_LOGI("aiqa_audio", "Startup playback self-test finished");
-    ret = post_tts_self_test(AIQA_STARTUP_TTS_SELF_TEST_TEXT);
-    if (ret != ESP_OK) {
-        ESP_LOGW("aiqa_tts", "Failed to queue startup TTS self-test: %s", esp_err_to_name(ret));
-    }
+    ESP_LOGI("aiqa_tts", "Startup online TTS self-test skipped for lower first-chat latency");
 }
 
 static void handle_recording_transition(aiqa_transition_t transition)
@@ -937,83 +937,169 @@ static void chat_stream_delta_callback(const char *delta, void *user_ctx)
     });
 }
 
-static void tts_playback_audio_callback(const uint8_t *pcm, size_t pcm_bytes, void *user_ctx)
+static void tts_stream_playback_task(void *arg)
+{
+    aiqa_tts_playback_context_t *context = (aiqa_tts_playback_context_t *)arg;
+    if (context == NULL) {
+        vTaskDelete(NULL);
+        return;
+    }
+
+    bool started = false;
+    esp_err_t playback_ret = ESP_OK;
+    aiqa_audio_playback_config_t playback_config = aiqa_audio_playback_default_config();
+
+    while (context->status == ESP_OK) {
+        aiqa_tts_playback_item_t item = {0};
+        if (xQueueReceive(context->queue, &item, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        if (item.final) {
+            break;
+        }
+        if (!interaction_generation_is_current(context->generation)) {
+            playback_ret = ESP_ERR_INVALID_STATE;
+            secure_zero_bytes(item.pcm, sizeof(item.pcm));
+            break;
+        }
+
+        if (!started) {
+            playback_ret = aiqa_audio_playback_hw_init(&playback_config);
+            if (playback_ret == ESP_OK) {
+                playback_ret = aiqa_audio_playback_hw_start();
+            }
+            if (playback_ret != ESP_OK) {
+                (void)aiqa_audio_playback_hw_stop();
+                secure_zero_bytes(item.pcm, sizeof(item.pcm));
+                break;
+            }
+            started = true;
+        }
+
+        size_t offset = 0;
+        while (offset < item.pcm_bytes &&
+               context->status == ESP_OK &&
+               interaction_generation_is_current(context->generation)) {
+            size_t write_bytes = item.pcm_bytes - offset;
+            if (write_bytes > AIQA_AUDIO_PLAYBACK_CHUNK_BYTES) {
+                write_bytes = AIQA_AUDIO_PLAYBACK_CHUNK_BYTES;
+            }
+            if ((write_bytes % sizeof(int16_t)) != 0) {
+                write_bytes -= write_bytes % sizeof(int16_t);
+            }
+            if (write_bytes == 0) {
+                playback_ret = ESP_ERR_INVALID_SIZE;
+                break;
+            }
+            playback_ret = aiqa_audio_playback_hw_write_pcm(item.pcm + offset, write_bytes);
+            if (playback_ret != ESP_OK) {
+                break;
+            }
+            offset += write_bytes;
+            context->played_bytes += write_bytes;
+        }
+        secure_zero_bytes(item.pcm, sizeof(item.pcm));
+        if (playback_ret != ESP_OK || !interaction_generation_is_current(context->generation)) {
+            if (playback_ret == ESP_OK) {
+                playback_ret = ESP_ERR_INVALID_STATE;
+            }
+            break;
+        }
+    }
+
+    if (context->status == ESP_OK && playback_ret != ESP_OK) {
+        context->status = playback_ret;
+    }
+
+    aiqa_tts_playback_item_t pending = {0};
+    while (xQueueReceive(context->queue, &pending, 0) == pdTRUE) {
+        secure_zero_bytes(pending.pcm, sizeof(pending.pcm));
+    }
+
+    if (started) {
+        esp_err_t stop_ret = aiqa_audio_playback_hw_stop();
+        if (playback_ret == ESP_OK) {
+            playback_ret = stop_ret;
+        }
+        if (context->status == ESP_OK && stop_ret != ESP_OK) {
+            context->status = stop_ret;
+        }
+    }
+    xSemaphoreGive(context->done);
+    vTaskDelete(NULL);
+}
+
+static bool tts_playback_audio_callback(const uint8_t *pcm, size_t pcm_bytes, void *user_ctx)
 {
     aiqa_tts_playback_context_t *context = (aiqa_tts_playback_context_t *)user_ctx;
     if (context == NULL || context->status != ESP_OK || pcm == NULL || pcm_bytes == 0) {
-        return;
+        return false;
+    }
+    if (!interaction_generation_is_current(context->generation)) {
+        context->status = ESP_ERR_INVALID_STATE;
+        return false;
     }
     if ((pcm_bytes % sizeof(int16_t)) != 0) {
         context->status = ESP_ERR_INVALID_SIZE;
-        return;
-    }
-
-    aiqa_tts_pcm_buffer_status_t append_status =
-        aiqa_tts_pcm_buffer_append(context->buffer, pcm, pcm_bytes);
-    if (append_status != AIQA_TTS_PCM_BUFFER_OK) {
-        context->status = append_status == AIQA_TTS_PCM_BUFFER_FULL ? ESP_ERR_NO_MEM : ESP_ERR_INVALID_ARG;
-        return;
-    }
-    context->audio_bytes += pcm_bytes;
-    context->audio_chunks += 1;
-}
-
-static uint8_t *allocate_tts_pcm_buffer(size_t capacity)
-{
-    if (capacity == 0) {
-        return NULL;
-    }
-    uint8_t *buffer = (uint8_t *)heap_caps_malloc(capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (buffer != NULL) {
-        return buffer;
-    }
-    return (uint8_t *)heap_caps_malloc(capacity, MALLOC_CAP_8BIT);
-}
-
-static esp_err_t play_buffered_pet_audio(const aiqa_tts_pcm_buffer_t *buffer, uint32_t generation)
-{
-    if (buffer == NULL || buffer->data == NULL || buffer->length == 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (!interaction_generation_is_current(generation)) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    aiqa_audio_playback_config_t playback_config = aiqa_audio_playback_default_config();
-    esp_err_t playback_ret = aiqa_audio_playback_hw_init(&playback_config);
-    if (playback_ret == ESP_OK) {
-        playback_ret = aiqa_audio_playback_hw_start();
-    }
-    if (playback_ret != ESP_OK) {
-        (void)aiqa_audio_playback_hw_stop();
-        return playback_ret;
+        return false;
     }
 
     size_t offset = 0;
-    while (offset < buffer->length && interaction_generation_is_current(generation)) {
-        size_t write_bytes = buffer->length - offset;
-        if (write_bytes > AIQA_AUDIO_PLAYBACK_CHUNK_BYTES) {
-            write_bytes = AIQA_AUDIO_PLAYBACK_CHUNK_BYTES;
+    while (offset < pcm_bytes) {
+        if (context->status != ESP_OK || !interaction_generation_is_current(context->generation)) {
+            context->status = ESP_ERR_INVALID_STATE;
+            return false;
         }
-        if ((write_bytes % sizeof(int16_t)) != 0) {
-            write_bytes -= write_bytes % sizeof(int16_t);
+        size_t chunk_bytes = pcm_bytes - offset;
+        if (chunk_bytes > AIQA_AUDIO_PLAYBACK_CHUNK_BYTES) {
+            chunk_bytes = AIQA_AUDIO_PLAYBACK_CHUNK_BYTES;
         }
-        if (write_bytes == 0) {
-            playback_ret = ESP_ERR_INVALID_SIZE;
-            break;
+        if ((chunk_bytes % sizeof(int16_t)) != 0) {
+            chunk_bytes -= chunk_bytes % sizeof(int16_t);
         }
-        playback_ret = aiqa_audio_playback_hw_write_pcm(buffer->data + offset, write_bytes);
-        if (playback_ret != ESP_OK) {
-            break;
+        if (chunk_bytes == 0) {
+            context->status = ESP_ERR_INVALID_SIZE;
+            return false;
         }
-        offset += write_bytes;
+
+        aiqa_tts_playback_item_t item = {
+            .pcm = {0},
+            .pcm_bytes = chunk_bytes,
+            .final = false,
+        };
+        (void)memcpy(item.pcm, pcm + offset, chunk_bytes);
+        if (xQueueSend(context->queue, &item, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            secure_zero_bytes(item.pcm, sizeof(item.pcm));
+            context->status = ESP_ERR_TIMEOUT;
+            return false;
+        }
+        context->audio_bytes += chunk_bytes;
+        context->audio_chunks += 1;
+        offset += chunk_bytes;
+    }
+    return true;
+}
+
+static void finish_tts_stream_playback(aiqa_tts_playback_context_t *context)
+{
+    if (context == NULL || context->queue == NULL || context->done == NULL) {
+        return;
     }
 
-    esp_err_t stop_ret = aiqa_audio_playback_hw_stop();
-    if (!interaction_generation_is_current(generation)) {
-        return ESP_ERR_INVALID_STATE;
+    aiqa_tts_playback_item_t final_item = {
+        .pcm = {0},
+        .pcm_bytes = 0,
+        .final = true,
+    };
+    if (xQueueSend(context->queue, &final_item, pdMS_TO_TICKS(2000)) != pdTRUE) {
+        context->status = ESP_ERR_TIMEOUT;
+        (void)aiqa_audio_playback_hw_stop();
     }
-    return playback_ret == ESP_OK ? stop_ret : playback_ret;
+    if (xSemaphoreTake(context->done, pdMS_TO_TICKS(AIQA_TTS_PLAYBACK_FINISH_TIMEOUT_MS)) != pdTRUE) {
+        context->status = ESP_ERR_TIMEOUT;
+        (void)aiqa_audio_playback_hw_stop();
+        (void)xSemaphoreTake(context->done, portMAX_DELAY);
+    }
 }
 
 static void speak_pet_answer(const char *answer, uint32_t generation)
@@ -1025,20 +1111,38 @@ static void speak_pet_answer(const char *answer, uint32_t generation)
         return;
     }
 
-    uint8_t *pcm_storage = allocate_tts_pcm_buffer(AIQA_TTS_BUFFERED_PCM_MAX_BYTES);
-    if (pcm_storage == NULL) {
-        ESP_LOGW("aiqa_tts", "TTS PCM buffer allocation failed");
-        return;
-    }
-    aiqa_tts_pcm_buffer_t pcm_buffer;
-    aiqa_tts_pcm_buffer_init(&pcm_buffer, pcm_storage, AIQA_TTS_BUFFERED_PCM_MAX_BYTES);
-
     aiqa_tts_playback_context_t playback_context = {
-        .buffer = &pcm_buffer,
+        .queue = xQueueCreate(AIQA_TTS_PLAYBACK_QUEUE_DEPTH, sizeof(aiqa_tts_playback_item_t)),
+        .done = xSemaphoreCreateBinary(),
+        .generation = generation,
         .status = ESP_OK,
         .audio_bytes = 0,
         .audio_chunks = 0,
+        .played_bytes = 0,
     };
+    if (playback_context.queue == NULL || playback_context.done == NULL) {
+        if (playback_context.queue != NULL) {
+            vQueueDelete(playback_context.queue);
+        }
+        if (playback_context.done != NULL) {
+            vSemaphoreDelete(playback_context.done);
+        }
+        ESP_LOGW("aiqa_tts", "TTS streaming playback queue allocation failed");
+        return;
+    }
+
+    if (xTaskCreate(tts_stream_playback_task,
+                    "aiqa_tts_play",
+                    AIQA_TASK_STACK_TTS_PLAYBACK,
+                    &playback_context,
+                    6,
+                    NULL) != pdPASS) {
+        vQueueDelete(playback_context.queue);
+        vSemaphoreDelete(playback_context.done);
+        ESP_LOGW("aiqa_tts", "TTS streaming playback task creation failed");
+        return;
+    }
+
     aiqa_tts_result_t tts_result = {0};
     esp_err_t tts_ret = aiqa_tts_speak_streaming(
         &s_config_snapshot.config,
@@ -1047,37 +1151,30 @@ static void speak_pet_answer(const char *answer, uint32_t generation)
         tts_playback_audio_callback,
         &playback_context,
         &tts_result);
+    finish_tts_stream_playback(&playback_context);
+    vQueueDelete(playback_context.queue);
+    vSemaphoreDelete(playback_context.done);
+
     if (!interaction_generation_is_current(generation)) {
-        secure_zero_bytes(pcm_storage, AIQA_TTS_BUFFERED_PCM_MAX_BYTES);
-        heap_caps_free(pcm_storage);
         return;
     }
 
     if (tts_ret == ESP_OK && tts_result.status == AIQA_TTS_OK &&
-        playback_context.status == ESP_OK && !pcm_buffer.overflow) {
-        esp_err_t play_ret = play_buffered_pet_audio(&pcm_buffer, generation);
-        if (play_ret == ESP_OK) {
-            ESP_LOGI("aiqa_tts", "Pet reply playback complete: chunks=%u bytes=%u buffered=%u",
-                     (unsigned)playback_context.audio_chunks,
-                     (unsigned)playback_context.audio_bytes,
-                     (unsigned)pcm_buffer.length);
-        } else if (interaction_generation_is_current(generation)) {
-            ESP_LOGW("aiqa_tts", "Buffered pet reply playback failed: %s", esp_err_to_name(play_ret));
-        }
-        secure_zero_bytes(pcm_storage, AIQA_TTS_BUFFERED_PCM_MAX_BYTES);
-        heap_caps_free(pcm_storage);
+        playback_context.status == ESP_OK) {
+        ESP_LOGI("aiqa_tts", "Pet reply streaming playback complete: chunks=%u bytes=%u played=%u",
+                 (unsigned)playback_context.audio_chunks,
+                 (unsigned)playback_context.audio_bytes,
+                 (unsigned)playback_context.played_bytes);
         return;
     }
 
-    ESP_LOGW("aiqa_tts", "Pet reply playback skipped/failed: transport=%s tts=%s http=%d audio_bytes=%u write=%s stop=%s",
+    ESP_LOGW("aiqa_tts", "Pet reply playback skipped/failed: transport=%s tts=%s http=%d audio_bytes=%u playback=%s chunks=%u",
              esp_err_to_name(tts_ret),
              aiqa_tts_status_name(tts_result.status),
              tts_result.http_status,
              (unsigned)tts_result.audio_bytes,
              esp_err_to_name(playback_context.status),
-             pcm_buffer.overflow ? "overflow" : "not_started");
-    secure_zero_bytes(pcm_storage, AIQA_TTS_BUFFERED_PCM_MAX_BYTES);
-    heap_caps_free(pcm_storage);
+             (unsigned)playback_context.audio_chunks);
 }
 
 static void chat_task(void *arg)
@@ -1095,12 +1192,6 @@ static void chat_task(void *arg)
         if (!interaction_generation_is_current(command.generation)) {
             ESP_LOGI("aiqa_chat", "Skipping stale chat command generation=%u",
                      (unsigned)command.generation);
-            (void)memset(command.prompt, 0, sizeof(command.prompt));
-            continue;
-        }
-        if (command.type == AIQA_CHAT_COMMAND_TTS_SELF_TEST) {
-            ESP_LOGI("aiqa_tts", "Running startup online TTS self-test");
-            speak_pet_answer(command.prompt, command.generation);
             (void)memset(command.prompt, 0, sizeof(command.prompt));
             continue;
         }

@@ -29,6 +29,7 @@ typedef struct {
     char audio_b64[AIQA_TTS_AUDIO_BASE64_MAX_LEN];
     uint8_t pcm[AIQA_TTS_PCM_CHUNK_MAX_BYTES];
     bool overflow;
+    bool abort_requested;
     const char *overflow_reason;
     aiqa_tts_audio_cb_t on_audio;
     void *user_ctx;
@@ -158,6 +159,9 @@ static void process_stream_event(aiqa_tts_stream_context_t *context, char *event
     if (context == NULL || event_data == NULL || event_len == 0) {
         return;
     }
+    if (context->abort_requested) {
+        return;
+    }
     if (event_len >= AIQA_TTS_STREAM_CARRY_MAX_LEN) {
         set_stream_overflow(context, "event");
         return;
@@ -189,8 +193,11 @@ static void process_stream_event(aiqa_tts_stream_context_t *context, char *event
         return;
     }
 
-    if (context->on_audio != NULL) {
-        context->on_audio(context->pcm, pcm_len, context->user_ctx);
+    if (context->on_audio != NULL &&
+        !context->on_audio(context->pcm, pcm_len, context->user_ctx)) {
+        context->abort_requested = true;
+        secure_zero(context->pcm, sizeof(context->pcm));
+        return;
     }
     log_stream_audio_progress(context->result, pcm_len);
     if (context->result != NULL) {
@@ -205,6 +212,9 @@ static void process_stream_chunk(aiqa_tts_stream_context_t *context, const char 
     if (context == NULL || chunk == NULL || chunk_len == 0) {
         return;
     }
+    if (context->abort_requested || context->overflow) {
+        return;
+    }
     if (context->carry_length + chunk_len >= sizeof(context->carry)) {
         set_stream_overflow(context, "carry");
         return;
@@ -216,7 +226,7 @@ static void process_stream_chunk(aiqa_tts_stream_context_t *context, const char 
 
     size_t separator_len = 0;
     char *separator = find_stream_event_separator(context->carry, context->carry_length, &separator_len);
-    while (separator != NULL) {
+    while (separator != NULL && !context->abort_requested && !context->overflow) {
         const size_t event_len = (size_t)(separator - context->carry);
         process_stream_event(context, context->carry, event_len);
 
@@ -233,7 +243,8 @@ static void process_stream_chunk(aiqa_tts_stream_context_t *context, const char 
 
 static void process_stream_remainder(aiqa_tts_stream_context_t *context)
 {
-    if (context == NULL || context->carry_length == 0) {
+    if (context == NULL || context->carry_length == 0 ||
+        context->abort_requested || context->overflow) {
         return;
     }
 
@@ -253,7 +264,7 @@ static esp_err_t tts_http_event_handler(esp_http_client_event_t *event)
 
     aiqa_tts_stream_context_t *context = (aiqa_tts_stream_context_t *)event->user_data;
     process_stream_chunk(context, (const char *)event->data, (size_t)event->data_len);
-    return ESP_OK;
+    return context->abort_requested ? ESP_ERR_INVALID_STATE : ESP_OK;
 }
 
 esp_err_t aiqa_tts_speak_streaming(
@@ -378,7 +389,11 @@ esp_err_t aiqa_tts_speak_streaming(
     result->http_status = esp_http_client_get_status_code(client);
     if (ret != ESP_OK) {
         result->status = status_from_transport(ret);
-        ESP_LOGE(TAG, "TTS transport failed: %s", esp_err_to_name(ret));
+        if (stream->abort_requested) {
+            ESP_LOGW(TAG, "TTS stream aborted by audio sink: %s", esp_err_to_name(ret));
+        } else {
+            ESP_LOGE(TAG, "TTS transport failed: %s", esp_err_to_name(ret));
+        }
     } else {
         process_stream_remainder(stream);
         result->status = aiqa_tts_status_from_http_status(result->http_status);

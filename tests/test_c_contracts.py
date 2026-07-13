@@ -772,6 +772,7 @@ class CContractTests(unittest.TestCase):
                     assert(strstr(body, "\\"model\\":\\"qwen3.7-max\\"") != 0);
                     assert(strstr(body, "\\"role\\":\\"system\\"") != 0);
                     assert(strstr(body, "AI electronic pet") != 0);
+                    assert(strstr(body, "one to three short spoken sentences") != 0);
                     assert(strstr(body, "\\"stream\\":false") != 0);
                     assert(strstr(body, "\\"enable_thinking\\":false") != 0);
                     assert(strstr(body, "\\"max_tokens\\":96") != 0);
