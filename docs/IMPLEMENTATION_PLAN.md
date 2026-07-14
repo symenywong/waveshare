@@ -165,12 +165,41 @@ Implemented:
 - The browser Web Serial adapter can select a device, exchange and validate the
   framed hello response, enforce a timeout, and close stalled connections without
   displaying device-supplied error details.
+- The isolated `management_session` component now implements the cryptographic
+  core for MbedTLS ECJPAKE with fixed client/device roles, SHA-256, P-256, and
+  uncompressed points. It has no dependency on the runtime, configuration store,
+  or management service.
+- The canonical transcript binds protocol and suite versions, both roles,
+  credential and handshake IDs, device identity, USB transport identity, both
+  nonces, and all four raw ECJPAKE messages. HKDF derives separate directional
+  AES-256-GCM keys, nonce prefixes, Finished keys, and a session identifier.
+- Both peers must verify role-specific HMAC-SHA-256 Finished proofs before a
+  session can be activated. Provisional key material stays behind an opaque,
+  single-use handle and cannot be consumed by the secure channel until the local
+  proof is created and the peer proof is verified. The secure record layer
+  enforces client-to-device requests and device-to-client responses/events,
+  authenticates the outer
+  `AQMG` header and inner `AQSE` header, uses direction-specific 96-bit nonces,
+  requires exact monotonic counters, and does not advance receive state after an
+  authentication failure.
+- Host-side tests build against ESP-IDF's vendored MbedTLS and cover matching and
+  mismatched codes, transcript identity mismatch, tampered ECJPAKE messages,
+  random-source failure, Finished confirmation, AEAD tampering, outer-frame
+  substitution, direction/session substitution, and replay rejection under
+  AddressSanitizer and UndefinedBehaviorSanitizer.
 
 Next:
 
-- Implement an audited PAKE (MbedTLS ECJPAKE) followed by HKDF-derived AEAD session
-  keys, monotonic replay counters, expiry, lockout, and a reset path. Do not open
-  status, Wi-Fi, provider, key, prompt, or debug methods before this boundary.
+- Add the device-owned pairing lifecycle around the isolated cryptographic core:
+  a locally initiated one-time eight-digit code, production entropy/DRBG,
+  120-second expiry, bounded online attempts, persistent lockout accounting,
+  disconnect cleanup, and an explicit local reset path.
+- Add strict pairing RPC messages and two-way Finished exchange to the USB owner.
+  Do not activate a session until the client proof is verified and the device
+  proof has been fully sent. Status, Wi-Fi, provider, key, prompt, and debug
+  methods remain closed until this boundary is complete.
+- Supply the browser through an audited ECJPAKE WASM/native provider boundary;
+  do not implement elliptic-curve PAKE arithmetic directly in TypeScript.
 - Add the authenticated operation polling adapter, then optionally reuse the same
   encrypted protocol over BLE/Wi-Fi.
 - Before any production release, enable Secure Boot v2 plus release-mode Flash/NVS
