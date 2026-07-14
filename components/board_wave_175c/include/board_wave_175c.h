@@ -2,6 +2,7 @@
 
 #include "board_wave_175c_contract.h"
 #include "board_wave_175c_pet_types.h"
+#include "board_wave_175c_power.h"
 
 #include "esp_err.h"
 
@@ -43,6 +44,7 @@ esp_err_t board_wave_175c_display_animate_pet(
     board_wave_175c_pet_expression_t expression,
     uint16_t accent_rgb565);
 bool board_wave_175c_display_is_ready(void);
+esp_err_t board_wave_175c_get_power_status(board_wave_175c_power_status_t *out_status);
 
 #ifdef __cplusplus
 }

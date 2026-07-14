@@ -92,6 +92,10 @@ esp_err_t aiqa_audio_playback_hw_init(const aiqa_audio_playback_config_t *config
         return ESP_ERR_INVALID_ARG;
     }
     if (s_codec != NULL) {
+        s_config.volume_percent = config->volume_percent;
+        if (s_started) {
+            return codec_status_to_esp(esp_codec_dev_set_out_vol(s_codec, s_config.volume_percent));
+        }
         return ESP_OK;
     }
 
@@ -216,4 +220,24 @@ esp_err_t aiqa_audio_playback_hw_play_test_tone(uint32_t frequency_hz, uint32_t 
 bool aiqa_audio_playback_hw_is_ready(void)
 {
     return s_codec != NULL;
+}
+
+esp_err_t aiqa_audio_playback_hw_set_volume(uint8_t volume_percent)
+{
+    if (volume_percent > AIQA_AUDIO_PLAYBACK_MAX_SAFE_VOLUME_PERCENT) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_config.volume_percent = volume_percent;
+    if (s_codec == NULL) {
+        return ESP_OK;
+    }
+    return codec_status_to_esp(esp_codec_dev_set_out_vol(s_codec, volume_percent));
+}
+
+uint8_t aiqa_audio_playback_hw_get_volume(void)
+{
+    if (s_config.volume_percent > AIQA_AUDIO_PLAYBACK_MAX_SAFE_VOLUME_PERCENT) {
+        return AIQA_AUDIO_PLAYBACK_DEFAULT_VOLUME_PERCENT;
+    }
+    return s_config.volume_percent;
 }

@@ -278,6 +278,7 @@ static esp_err_t chat_send_request(
         .max_completion_tokens = config->max_completion_tokens,
         .response_language = response_language,
         .conversation_context = conversation_context,
+        .assistant_profile_context = NULL,
     };
     char *request_body = (char *)malloc(AIQA_CHAT_REQUEST_MAX_LEN);
     char *response_body = (char *)malloc(AIQA_CHAT_HTTP_RESPONSE_MAX_LEN);

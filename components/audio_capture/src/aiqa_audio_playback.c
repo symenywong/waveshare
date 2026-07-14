@@ -24,8 +24,7 @@ bool aiqa_audio_playback_config_is_safe(const aiqa_audio_playback_config_t *conf
         config->channels != AIQA_AUDIO_PLAYBACK_CHANNELS) {
         return false;
     }
-    if (config->volume_percent == 0 ||
-        config->volume_percent > AIQA_AUDIO_PLAYBACK_MAX_SAFE_VOLUME_PERCENT) {
+    if (config->volume_percent > AIQA_AUDIO_PLAYBACK_MAX_SAFE_VOLUME_PERCENT) {
         return false;
     }
     if (config->chunk_bytes == 0 || config->chunk_bytes > 4096 ||

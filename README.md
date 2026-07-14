@@ -1,9 +1,8 @@
-# Waveshare AI Pet
+# Waveshare AI Voice Assistant
 
-ESP-IDF project for an AI electronic pet on the Waveshare
-ESP32-S3-Touch-AMOLED-1.75C. The pet can answer knowledge questions, but the
-primary product surface is a companion-style pet UI with expressive on-screen
-moods.
+ESP-IDF project for a personal voice assistant on the Waveshare
+ESP32-S3-Touch-AMOLED-1.75C. The assistant answers clearly through speech, keeps
+the round-screen UI compact, and uses an expressive on-screen avatar for state.
 
 The first implementation stage establishes the safe runtime skeleton:
 
@@ -41,7 +40,7 @@ On boot the current firmware prints:
 - NVS provisioning status
 - Wi-Fi/SNTP network task status after provisioning
 - Qwen chat status after ASR transcript handoff
-- Qwen streaming chat deltas as `PET TYPING` dialogue updates
+- Qwen streaming chat deltas as compact `OUT` dialogue updates
 - Qwen ASR status for captured WAV audio after PTT release
 
 Local host-side checks:
@@ -52,8 +51,8 @@ python3 -m unittest discover -s tests
 
 The firmware currently stops at `ERROR/CONFIG_MISSING` until the `aiqa` NVS
 namespace is provisioned with Wi-Fi credentials and a chat API key. The AMOLED
-screen shows a readable pet page; without provisioning it should display
-`AI PET`, `SETUP NEEDED`, `NVS CONFIG MISSING`, and `RUN PROVISION TOOL`.
+screen shows a compact assistant page; without provisioning it should display
+short setup labels such as `PET`, `SETUP`, and `PAIR`.
 Long-pressing BOOT now drives the runtime into the `LISTENING` pet state and
 release moves it toward transcription. The ES7210/I2S capture path starts on
 press, stores 16 kHz/16-bit/mono PCM in PSRAM, stops on release, wraps the
@@ -61,12 +60,12 @@ recording as an in-memory WAV data URI, and sends it to Qwen ASR through the
 OpenAI-compatible `chat/completions` endpoint. Logs include byte/sample/peak
 statistics only; API keys, PCM, base64 audio, transcripts, and answers stay out
 of serial output. Recoverable ASR/chat errors keep the pet interactive: the
-screen prompts `LONG PRESS RETRY`, and the next long press starts a new
+screen prompts `RETRY`, and the next long press starts a new
 recording instead of leaving the state machine stuck on the error page.
 For Phase 7, the ASR transcript is handed to the configured Qwen chat model.
 When streaming is enabled, partial `delta.content` updates redraw the pet
-dialogue page as `PET TYPING`; the final answer maps back into the pet state
-machine as `PET SAYS`.
+dialogue page as `OUT ...`; the final answer maps back into the state machine
+as `SPEAK`.
 Phase 9 adds release-hardening contracts for repeated PTT cycles, minimum heap
 before model requests, provider rate-limit cooldown, and privacy defaults that
 keep transcripts and answers out of logs.

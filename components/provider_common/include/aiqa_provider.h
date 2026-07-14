@@ -51,6 +51,7 @@ typedef struct {
     int max_completion_tokens;
     const char *response_language;
     const char *conversation_context;
+    const char *assistant_profile_context;
 } aiqa_chat_options_t;
 
 typedef struct {

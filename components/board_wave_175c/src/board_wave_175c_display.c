@@ -435,11 +435,23 @@ static esp_err_t display_draw_pet_expression(board_wave_175c_pet_expression_t ex
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint16_t cells[BOARD_WAVE_175C_PET_SPRITE_WIDTH * BOARD_WAVE_175C_PET_SPRITE_HEIGHT] = {0};
+    const size_t cell_count = BOARD_WAVE_175C_PET_SPRITE_WIDTH * BOARD_WAVE_175C_PET_SPRITE_HEIGHT;
+    uint16_t *cells = (uint16_t *)heap_caps_calloc(cell_count,
+                                                   sizeof(uint16_t),
+                                                   MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (cells == NULL) {
+        cells = (uint16_t *)heap_caps_calloc(cell_count,
+                                            sizeof(uint16_t),
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (cells == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
     if (!board_wave_175c_pet_sprite_render(sprite,
                                            s_pet_animation_frame++,
                                            cells,
-                                           sizeof(cells) / sizeof(cells[0]))) {
+                                           cell_count)) {
+        free(cells);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -451,6 +463,7 @@ static esp_err_t display_draw_pet_expression(board_wave_175c_pet_expression_t ex
         buffer = (uint16_t *)heap_caps_malloc(chunk_pixels * sizeof(uint16_t), MALLOC_CAP_DMA);
     }
     if (buffer == NULL) {
+        free(cells);
         return ESP_ERR_NO_MEM;
     }
 
@@ -484,6 +497,7 @@ static esp_err_t display_draw_pet_expression(board_wave_175c_pet_expression_t ex
     }
 
     free(buffer);
+    free(cells);
     return ret;
 }
 

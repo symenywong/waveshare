@@ -6,8 +6,9 @@
 
 static const char *CHAT_COMPLETIONS_PATH = "/chat/completions";
 static const char *PET_SYSTEM_PROMPT_BASE =
-    "You are an AI electronic pet on a tiny round screen. "
-    "Answer warmly in one to three short spoken sentences. "
+    "You are a personal voice assistant on a tiny round screen. "
+    "Answer clearly and concisely in one to three short spoken sentences. "
+    "Do not call the user master or use owner-style honorifics. "
     "Avoid markdown, long paragraphs, and exhaustive lists.";
 static const char *PET_SYSTEM_PROMPT_ENGLISH =
     "Reply in English with simple display-safe text.";
@@ -107,9 +108,11 @@ static aiqa_chat_status_t append_conversation_context_message(
     char *out,
     size_t out_size,
     size_t *pos,
-    const char *conversation_context)
+    const char *conversation_context,
+    const char *assistant_profile_context)
 {
-    if (conversation_context == NULL || conversation_context[0] == '\0') {
+    if ((conversation_context == NULL || conversation_context[0] == '\0') &&
+        (assistant_profile_context == NULL || assistant_profile_context[0] == '\0')) {
         return AIQA_CHAT_OK;
     }
 
@@ -121,17 +124,29 @@ static aiqa_chat_status_t append_conversation_context_message(
     if (status != AIQA_CHAT_OK) {
         return status;
     }
-    status = append_escaped_json_content(
-        out,
-        out_size,
-        pos,
-        "Recent conversation memory (oldest to newest; use only when relevant):\n");
-    if (status != AIQA_CHAT_OK) {
-        return status;
+    if (assistant_profile_context != NULL && assistant_profile_context[0] != '\0') {
+        status = append_escaped_json_content(out, out_size, pos, assistant_profile_context);
+        if (status != AIQA_CHAT_OK) {
+            return status;
+        }
+        status = append_escaped_json_content(out, out_size, pos, "\n");
+        if (status != AIQA_CHAT_OK) {
+            return status;
+        }
     }
-    status = append_escaped_json_content(out, out_size, pos, conversation_context);
-    if (status != AIQA_CHAT_OK) {
-        return status;
+    if (conversation_context != NULL && conversation_context[0] != '\0') {
+        status = append_escaped_json_content(
+            out,
+            out_size,
+            pos,
+            "Recent conversation memory (oldest to newest; use only when relevant):\n");
+        if (status != AIQA_CHAT_OK) {
+            return status;
+        }
+        status = append_escaped_json_content(out, out_size, pos, conversation_context);
+        if (status != AIQA_CHAT_OK) {
+            return status;
+        }
     }
     return append_char(out, out_size, pos, '"');
 }
@@ -232,7 +247,8 @@ aiqa_chat_status_t aiqa_chat_build_request_json(
         out_json,
         out_json_size,
         &pos,
-        options->conversation_context);
+        options->conversation_context,
+        options->assistant_profile_context);
     if (status != AIQA_CHAT_OK) {
         return status;
     }

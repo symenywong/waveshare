@@ -11,9 +11,9 @@
 extern "C" {
 #endif
 
-#define BOARD_WAVE_175C_PET_SPRITE_WIDTH 24
-#define BOARD_WAVE_175C_PET_SPRITE_HEIGHT 24
-#define BOARD_WAVE_175C_PET_SPRITE_SCALE 7
+#define BOARD_WAVE_175C_PET_SPRITE_WIDTH 160
+#define BOARD_WAVE_175C_PET_SPRITE_HEIGHT 160
+#define BOARD_WAVE_175C_PET_SPRITE_SCALE 1
 
 typedef struct {
     board_wave_175c_pet_expression_t expression;

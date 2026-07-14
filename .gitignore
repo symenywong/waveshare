@@ -11,3 +11,7 @@ __pycache__/
 *.secrets.json
 *.log
 config.local.json
+client/node_modules/
+client/dist/
+client/coverage/
+client/*.tsbuildinfo

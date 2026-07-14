@@ -523,6 +523,110 @@ class CContractTests(unittest.TestCase):
             ["components/app_core/include"],
         )
 
+    def test_assistant_profile_defaults_updates_and_context(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_assistant_profile.h"
+                #include <assert.h>
+                #include <string.h>
+
+                int main(void) {
+                    aiqa_assistant_profile_t profile = aiqa_assistant_profile_default();
+                    assert(strcmp(profile.name, "AIQA") == 0);
+                    assert(profile.gender == AIQA_ASSISTANT_GENDER_NEUTRAL);
+                    assert(aiqa_assistant_profile_is_valid(&profile));
+
+                    assert(aiqa_assistant_profile_set_name(&profile, "小智"));
+                    assert(strcmp(profile.name, "小智") == 0);
+                    assert(aiqa_assistant_profile_set_gender(&profile, AIQA_ASSISTANT_GENDER_FEMALE));
+
+                    char context[160] = {0};
+                    assert(aiqa_assistant_profile_build_context(&profile, context, sizeof(context)));
+                    assert(strstr(context, "Assistant profile") != 0);
+                    assert(strstr(context, "小智") != 0);
+                    assert(strstr(context, "female") != 0);
+
+                    assert(!aiqa_assistant_profile_set_name(&profile, ""));
+                    assert(!aiqa_assistant_profile_set_name(&profile, "abcdefghijklmnopqrstuvwxyz0123456789"));
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_assistant_profile.c"],
+            ["components/app_core/include"],
+        )
+
+    def test_local_command_parser_handles_volume_power_time_and_profile(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_local_command.h"
+                #include <assert.h>
+                #include <string.h>
+
+                int main(void) {
+                    aiqa_local_command_t command;
+
+                    assert(aiqa_local_command_parse("音量调大一点", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_VOLUME_RELATIVE);
+                    assert(command.value == 10);
+
+                    assert(aiqa_local_command_parse("音量调小一点", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_VOLUME_RELATIVE);
+                    assert(command.value == -10);
+
+                    assert(aiqa_local_command_parse("音量调到50", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_VOLUME_SET);
+                    assert(command.value == 50);
+
+                    assert(aiqa_local_command_parse("音量调到150", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_VOLUME_SET);
+                    assert(command.value == 100);
+
+                    assert(aiqa_local_command_parse("静音", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_VOLUME_SET);
+                    assert(command.value == 0);
+
+                    assert(aiqa_local_command_parse("当前音量是多少", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_VOLUME_QUERY);
+
+                    assert(aiqa_local_command_parse("现在电量多少", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_BATTERY_QUERY);
+
+                    assert(aiqa_local_command_parse("今天日期", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_DATE_QUERY);
+
+                    assert(aiqa_local_command_parse("现在几点", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_TIME_QUERY);
+
+                    assert(aiqa_local_command_parse("星期几", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_WEEKDAY_QUERY);
+
+                    assert(aiqa_local_command_parse("你叫小智", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_SET_NAME);
+                    assert(strcmp(command.text, "小智") == 0);
+
+                    assert(aiqa_local_command_parse("把名字改成 小夏", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_SET_NAME);
+                    assert(strcmp(command.text, "小夏") == 0);
+
+                    assert(aiqa_local_command_parse("你是女声", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_SET_GENDER);
+                    assert(command.gender == AIQA_ASSISTANT_GENDER_FEMALE);
+
+                    assert(!aiqa_local_command_parse("讲个故事", &command));
+                    return 0;
+                }
+                """
+            ),
+            [
+                "components/app_core/src/aiqa_local_command.c",
+                "components/app_core/src/aiqa_assistant_profile.c",
+            ],
+            ["components/app_core/include"],
+        )
+
     def test_runtime_ui_prefers_dialogue_on_answer_page(self):
         self.compile_and_run(
             textwrap.dedent(
@@ -783,8 +887,10 @@ class CContractTests(unittest.TestCase):
                     assert(status == AIQA_CHAT_OK);
                     assert(strstr(body, "\\"model\\":\\"qwen3.7-max\\"") != 0);
                     assert(strstr(body, "\\"role\\":\\"system\\"") != 0);
-                    assert(strstr(body, "AI electronic pet") != 0);
-                    assert(strstr(body, "one to three short spoken sentences") != 0);
+                    assert(strstr(body, "personal voice assistant") != 0);
+                    assert(strstr(body, "Do not call the user") != 0);
+                    assert(strstr(body, "AI electronic pet") == 0);
+                    assert(strstr(body, "主人") == 0);
                     assert(strstr(body, "\\"stream\\":false") != 0);
                     assert(strstr(body, "\\"enable_thinking\\":false") != 0);
                     assert(strstr(body, "\\"max_tokens\\":96") != 0);
@@ -857,6 +963,7 @@ class CContractTests(unittest.TestCase):
                     assert(strstr(body, "sk-") == 0);
 
                     options.conversation_context = "User: 我的名字是小明\\nPet: 我记住啦";
+                    options.assistant_profile_context = "Assistant profile: name=小智, gender=female.";
                     status = aiqa_chat_build_request_json(
                         &config,
                         &options,
@@ -865,11 +972,14 @@ class CContractTests(unittest.TestCase):
                         sizeof(body));
                     assert(status == AIQA_CHAT_OK);
                     assert(strstr(body, "Recent conversation memory") != 0);
+                    assert(strstr(body, "Assistant profile") != 0);
+                    assert(strstr(body, "小智") != 0);
                     assert(strstr(body, "我的名字是小明") != 0);
                     assert(strstr(body, "我叫什么名字") != 0);
 
                     options.response_language = aiqa_language_chat_code(AIQA_DIALOGUE_LANGUAGE_ENGLISH);
                     options.conversation_context = NULL;
+                    options.assistant_profile_context = NULL;
                     status = aiqa_chat_build_request_json(
                         &config,
                         &options,
@@ -1250,6 +1360,42 @@ class CContractTests(unittest.TestCase):
             ["components/board_wave_175c/include"],
         )
 
+    def test_board_power_status_decodes_axp2101_registers(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "board_wave_175c_power.h"
+                #include <assert.h>
+
+                int main(void) {
+                    board_wave_175c_power_status_t status = {0};
+                    assert(board_wave_175c_power_decode_axp2101_status(
+                        0x28, 0x02, 68, &status));
+                    assert(status.battery_present);
+                    assert(status.vbus_good);
+                    assert(status.percent == 68);
+                    assert(status.charging_state == BOARD_WAVE_175C_CHARGING_ACTIVE);
+
+                    assert(board_wave_175c_power_decode_axp2101_status(
+                        0x20, 0x00, 100, &status));
+                    assert(status.battery_present);
+                    assert(!status.vbus_good);
+                    assert(status.percent == 100);
+                    assert(status.charging_state == BOARD_WAVE_175C_CHARGING_DISCHARGING);
+
+                    assert(board_wave_175c_power_decode_axp2101_status(
+                        0x08, 0x00, 255, &status));
+                    assert(!status.battery_present);
+                    assert(status.vbus_good);
+                    assert(status.percent == 0);
+                    return 0;
+                }
+                """
+            ),
+            ["components/board_wave_175c/src/board_wave_175c_power.c"],
+            ["components/board_wave_175c/include"],
+        )
+
     def test_board_display_pin_contract(self):
         self.compile_and_run(
             textwrap.dedent(
@@ -1315,10 +1461,33 @@ class CContractTests(unittest.TestCase):
                 """
                 #include "board_wave_175c_pet_sprite.h"
                 #include <assert.h>
+                #include <string.h>
+
+                static size_t count_visible_pixels(const uint16_t *pixels) {
+                    size_t count = 0;
+                    for (size_t index = 0;
+                         index < BOARD_WAVE_175C_PET_SPRITE_WIDTH *
+                                 BOARD_WAVE_175C_PET_SPRITE_HEIGHT;
+                         ++index) {
+                        if (pixels[index] != 0) {
+                            ++count;
+                        }
+                    }
+                    return count;
+                }
 
                 int main(void) {
-                    uint16_t pixels[BOARD_WAVE_175C_PET_SPRITE_WIDTH *
-                                    BOARD_WAVE_175C_PET_SPRITE_HEIGHT] = {0};
+                    assert(BOARD_WAVE_175C_PET_SPRITE_WIDTH == 160);
+                    assert(BOARD_WAVE_175C_PET_SPRITE_HEIGHT == 160);
+                    assert(BOARD_WAVE_175C_PET_SPRITE_SCALE == 1);
+                    assert((BOARD_WAVE_175C_PET_SPRITE_WIDTH *
+                            BOARD_WAVE_175C_PET_SPRITE_HEIGHT *
+                            sizeof(uint16_t)) <= 52 * 1024);
+
+                    static uint16_t first_frame[BOARD_WAVE_175C_PET_SPRITE_WIDTH *
+                                                BOARD_WAVE_175C_PET_SPRITE_HEIGHT];
+                    static uint16_t pixels[BOARD_WAVE_175C_PET_SPRITE_WIDTH *
+                                           BOARD_WAVE_175C_PET_SPRITE_HEIGHT];
                     for (int expression = 0;
                          expression < BOARD_WAVE_175C_PET_EXPRESSION_COUNT;
                          ++expression) {
@@ -1331,16 +1500,39 @@ class CContractTests(unittest.TestCase):
                         assert(sprite->height == BOARD_WAVE_175C_PET_SPRITE_HEIGHT);
                         assert(sprite->scale == BOARD_WAVE_175C_PET_SPRITE_SCALE);
                         assert(sprite->frame_count >= 2);
-                        assert(board_wave_175c_pet_sprite_render(sprite, 0, pixels,
-                                                                 sizeof(pixels) / sizeof(pixels[0])));
-                        assert(board_wave_175c_pet_sprite_render(sprite, 1, pixels,
-                                                                 sizeof(pixels) / sizeof(pixels[0])));
-                        assert(pixels[(BOARD_WAVE_175C_PET_SPRITE_HEIGHT / 2) *
-                                      BOARD_WAVE_175C_PET_SPRITE_WIDTH +
-                                      BOARD_WAVE_175C_PET_SPRITE_WIDTH / 2] != 0);
+                        assert(board_wave_175c_pet_sprite_render(
+                            sprite, 0, first_frame,
+                            sizeof(first_frame) / sizeof(first_frame[0])));
+                        assert(first_frame[(BOARD_WAVE_175C_PET_SPRITE_HEIGHT / 2) *
+                                           BOARD_WAVE_175C_PET_SPRITE_WIDTH +
+                                           BOARD_WAVE_175C_PET_SPRITE_WIDTH / 2] != 0);
+
+                        size_t first_visible = count_visible_pixels(first_frame);
+                        assert(first_visible > 2500);
+                        assert(first_visible < BOARD_WAVE_175C_PET_SPRITE_WIDTH *
+                                               BOARD_WAVE_175C_PET_SPRITE_HEIGHT);
+
+                        bool has_frame_delta = false;
+                        for (size_t frame = 1; frame < sprite->frame_count; ++frame) {
+                            assert(board_wave_175c_pet_sprite_render(
+                                sprite, frame, pixels,
+                                sizeof(pixels) / sizeof(pixels[0])));
+                            size_t visible = count_visible_pixels(pixels);
+                            assert(visible > 2500);
+                            assert(visible < BOARD_WAVE_175C_PET_SPRITE_WIDTH *
+                                             BOARD_WAVE_175C_PET_SPRITE_HEIGHT);
+                            if (memcmp(first_frame, pixels, sizeof(pixels)) != 0) {
+                                has_frame_delta = true;
+                            }
+                        }
+                        assert(has_frame_delta);
 
                         board_wave_175c_display_rect_t rect = {0};
                         assert(board_wave_175c_pet_sprite_rect(sprite, &rect));
+                        assert(rect.x == 153);
+                        assert(rect.y == 102);
+                        assert(rect.width == 160);
+                        assert(rect.height == 160);
                         assert(rect.x >= 0);
                         assert(rect.y >= 0);
                         assert(board_wave_175c_display_rect_inside_safe_circle(
@@ -1429,7 +1621,7 @@ class CContractTests(unittest.TestCase):
                     assert(config.sample_rate_hz == 24000);
                     assert(config.bits_per_sample == 16);
                     assert(config.channels == 1);
-                    assert(config.volume_percent == 85);
+                    assert(config.volume_percent == 10);
                     assert(config.chunk_bytes == 1024);
                     assert(aiqa_audio_playback_config_is_safe(&config));
 
@@ -1443,6 +1635,10 @@ class CContractTests(unittest.TestCase):
                     config = aiqa_audio_playback_default_config();
                     config.volume_percent = 101;
                     assert(!aiqa_audio_playback_config_is_safe(&config));
+
+                    config = aiqa_audio_playback_default_config();
+                    config.volume_percent = 0;
+                    assert(aiqa_audio_playback_config_is_safe(&config));
 
                     config = aiqa_audio_playback_default_config();
                     config.chunk_bytes = 0;
@@ -1594,6 +1790,140 @@ class CContractTests(unittest.TestCase):
             ),
             ["components/net_connect/src/aiqa_net_policy.c"],
             ["components/net_connect/include"],
+        )
+
+    def test_wifi_update_is_validated_immutable_revisioned_and_redacted(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_config.h"
+                #include <assert.h>
+                #include <stdint.h>
+                #include <stdio.h>
+                #include <string.h>
+
+                int main(void) {
+                    aiqa_secret_config_t current = {0};
+                    (void)snprintf(current.wifi_ssid, sizeof(current.wifi_ssid), "%s", "old-wifi");
+                    (void)snprintf(current.wifi_password, sizeof(current.wifi_password), "%s", "old-password");
+                    (void)snprintf(current.chat_api_key, sizeof(current.chat_api_key), "%s", "sk-chat-secret");
+                    (void)snprintf(current.asr_api_key, sizeof(current.asr_api_key), "%s", "sk-asr-secret");
+
+                    aiqa_wifi_update_t request = {
+                        .base_revision = 7,
+                        .ssid = "new-wifi",
+                        .password_action = AIQA_WIFI_PASSWORD_REPLACE,
+                        .password = "new-password",
+                    };
+                    aiqa_secret_config_t updated = {0};
+                    uint32_t next_revision = 0;
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, 7, &request, &updated, &next_revision) == AIQA_WIFI_UPDATE_OK);
+                    assert(next_revision == 8);
+                    assert(strcmp(updated.wifi_ssid, "new-wifi") == 0);
+                    assert(strcmp(updated.wifi_password, "new-password") == 0);
+                    assert(strcmp(updated.chat_api_key, "sk-chat-secret") == 0);
+                    assert(strcmp(updated.asr_api_key, "sk-asr-secret") == 0);
+                    assert(strcmp(current.wifi_ssid, "old-wifi") == 0);
+                    assert(strcmp(current.wifi_password, "old-password") == 0);
+
+                    aiqa_public_wifi_config_t public_view = {0};
+                    assert(aiqa_config_build_public_wifi_view(
+                        &updated, next_revision, &public_view));
+                    assert(strcmp(public_view.ssid, "new-wifi") == 0);
+                    assert(public_view.has_password);
+                    assert(public_view.revision == 8);
+                    assert(sizeof(public_view) < sizeof(updated));
+
+                    request.base_revision = 6;
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, 7, &request, &updated, &next_revision) ==
+                        AIQA_WIFI_UPDATE_ERR_REVISION_CONFLICT);
+
+                    request.base_revision = 7;
+                    request.ssid = "";
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, 7, &request, &updated, &next_revision) ==
+                        AIQA_WIFI_UPDATE_ERR_SSID);
+
+                    request.ssid = "new-wifi";
+                    request.password = "short";
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, 7, &request, &updated, &next_revision) ==
+                        AIQA_WIFI_UPDATE_ERR_PASSWORD);
+
+                    request.password_action = AIQA_WIFI_PASSWORD_KEEP;
+                    request.password = "must-not-cross-boundary";
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, 7, &request, &updated, &next_revision) ==
+                        AIQA_WIFI_UPDATE_ERR_PASSWORD_ACTION);
+
+                    request.password = 0;
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, 7, &request, &updated, &next_revision) == AIQA_WIFI_UPDATE_OK);
+                    assert(strcmp(updated.wifi_password, "old-password") == 0);
+
+                    request.password_action = AIQA_WIFI_PASSWORD_CLEAR;
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, 7, &request, &updated, &next_revision) == AIQA_WIFI_UPDATE_OK);
+                    assert(updated.wifi_password[0] == '\\0');
+
+                    request.password = "must-not-cross-boundary";
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, 7, &request, &updated, &next_revision) ==
+                        AIQA_WIFI_UPDATE_ERR_PASSWORD_ACTION);
+
+                    request.password_action = (aiqa_wifi_password_action_t)99;
+                    request.password = 0;
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, 7, &request, &updated, &next_revision) ==
+                        AIQA_WIFI_UPDATE_ERR_PASSWORD_ACTION);
+
+                    char ssid_32[33];
+                    (void)memset(ssid_32, 's', 32);
+                    ssid_32[32] = '\\0';
+                    request.ssid = ssid_32;
+                    request.password_action = AIQA_WIFI_PASSWORD_KEEP;
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, 7, &request, &updated, &next_revision) == AIQA_WIFI_UPDATE_OK);
+
+                    char ssid_33[34];
+                    (void)memset(ssid_33, 's', 33);
+                    ssid_33[33] = '\\0';
+                    request.ssid = ssid_33;
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, 7, &request, &updated, &next_revision) ==
+                        AIQA_WIFI_UPDATE_ERR_SSID);
+
+                    char password_63[64];
+                    (void)memset(password_63, 'p', 63);
+                    password_63[63] = '\\0';
+                    request.ssid = "boundary-network";
+                    request.password_action = AIQA_WIFI_PASSWORD_REPLACE;
+                    request.password = password_63;
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, 7, &request, &updated, &next_revision) == AIQA_WIFI_UPDATE_OK);
+
+                    char password_64[65];
+                    (void)memset(password_64, 'p', 64);
+                    password_64[64] = '\\0';
+                    request.password = password_64;
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, 7, &request, &updated, &next_revision) ==
+                        AIQA_WIFI_UPDATE_ERR_PASSWORD);
+
+                    request.password_action = AIQA_WIFI_PASSWORD_KEEP;
+                    request.password = 0;
+                    request.base_revision = UINT32_MAX;
+                    assert(aiqa_config_prepare_wifi_update(
+                        &current, UINT32_MAX, &request, &updated, &next_revision) ==
+                        AIQA_WIFI_UPDATE_ERR_REVISION_EXHAUSTED);
+                    return 0;
+                }
+                """
+            ),
+            ["components/config_store/src/aiqa_config.c", "components/provider_common/src/aiqa_provider.c"],
+            ["components/config_store/include", "components/provider_common/include"],
         )
 
 

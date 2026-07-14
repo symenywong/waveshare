@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiqa.local/contracts/device-management.schema.json",
+  "title": "AIQA device management Wi-Fi contract",
+  "oneOf": [
+    { "$ref": "#/$defs/wifiUpdate" },
+    { "$ref": "#/$defs/wifiPublicConfig" }
+  ],
+  "$defs": {
+    "wifiPublicConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "ssid", "hasPassword"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "ssid": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[^\\u0000]+$", "x-maxUtf8Bytes": 32 },
+        "hasPassword": { "type": "boolean" }
+      }
+    },
+    "wifiUpdate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["baseRevision", "ssid", "passwordAction"],
+          "properties": {
+            "baseRevision": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+            "ssid": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[^\\u0000]+$", "x-maxUtf8Bytes": 32 },
+            "passwordAction": { "const": "keep" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["baseRevision", "ssid", "passwordAction", "password"],
+          "properties": {
+            "baseRevision": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+            "ssid": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[^\\u0000]+$", "x-maxUtf8Bytes": 32 },
+            "passwordAction": { "const": "replace" },
+            "password": { "type": "string", "minLength": 8, "maxLength": 63, "pattern": "^[^\\u0000]+$", "x-maxUtf8Bytes": 63, "writeOnly": true }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["baseRevision", "ssid", "passwordAction"],
+          "properties": {
+            "baseRevision": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+            "ssid": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[^\\u0000]+$", "x-maxUtf8Bytes": 32 },
+            "passwordAction": { "const": "clear" }
+          }
+        }
+      ]
+    }
+  }
+}

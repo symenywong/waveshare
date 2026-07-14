@@ -57,6 +57,15 @@ static esp_err_t axp2101_write_reg(uint8_t reg, uint8_t value)
     return i2c_master_transmit(s_axp2101_dev, data, sizeof(data), 100);
 }
 
+static esp_err_t axp2101_read_reg(uint8_t reg, uint8_t *out_value)
+{
+    if (out_value == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ESP_RETURN_ON_ERROR(ensure_axp2101_device(), TAG, "AXP2101 device unavailable");
+    return i2c_master_transmit_receive(s_axp2101_dev, &reg, 1, out_value, 1, 100);
+}
+
 static esp_err_t init_axp2101_power(void)
 {
     ESP_RETURN_ON_ERROR(axp2101_write_reg(0x22, 0x06), TAG, "AXP2101 power key source config failed");
@@ -185,4 +194,27 @@ esp_err_t board_wave_175c_boot_button_is_pressed(bool *pressed)
 esp_err_t board_wave_175c_set_pa_enabled(bool enabled)
 {
     return gpio_set_level(WAVE_175C_PA, enabled ? 1 : 0);
+}
+
+esp_err_t board_wave_175c_get_power_status(board_wave_175c_power_status_t *out_status)
+{
+    if (out_status == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t status_reg0 = 0;
+    uint8_t charge_reg1 = 0;
+    uint8_t soc_reg = 0;
+    ESP_RETURN_ON_ERROR(axp2101_read_reg(0x00, &status_reg0), TAG, "AXP2101 status read failed");
+    ESP_RETURN_ON_ERROR(axp2101_read_reg(0x01, &charge_reg1), TAG, "AXP2101 charge read failed");
+    ESP_RETURN_ON_ERROR(axp2101_read_reg(0xA4, &soc_reg), TAG, "AXP2101 SOC read failed");
+
+    if (!board_wave_175c_power_decode_axp2101_status(
+            status_reg0,
+            charge_reg1,
+            soc_reg,
+            out_status)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
 }

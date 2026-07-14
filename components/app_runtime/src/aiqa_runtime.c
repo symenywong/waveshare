@@ -2,6 +2,7 @@
 #include "aiqa_config.h"
 #include "aiqa_config_nvs.h"
 #include "aiqa_conversation_memory.h"
+#include "aiqa_assistant_profile.h"
 #include "aiqa_audio_capture.h"
 #include "aiqa_audio_capture_hw.h"
 #include "aiqa_audio_playback.h"
@@ -9,6 +10,7 @@
 #include "aiqa_asr_client.h"
 #include "aiqa_chat_client.h"
 #include "aiqa_language.h"
+#include "aiqa_local_command.h"
 #include "aiqa_net_connect.h"
 #include "aiqa_ptt_button.h"
 #include "aiqa_provider.h"
@@ -29,6 +31,7 @@
 #include "freertos/projdefs.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 static const char *TAG = "aiqa_runtime";
 #define AIQA_APP_QUEUE_DEPTH 16
 #define AIQA_UI_QUEUE_DEPTH 8
@@ -128,6 +131,15 @@ static char s_local_pet_reply[AIQA_CHAT_RESPONSE_TEXT_MAX_LEN];
 static aiqa_dialogue_view_t s_latest_dialogue;
 static aiqa_conversation_memory_t s_conversation_memory;
 static aiqa_runtime_recording_t s_recording;
+
+static uint8_t current_volume_percent(void)
+{
+    if (!s_config_snapshot_ready ||
+        s_config_snapshot.user_prefs.volume_percent > AIQA_AUDIO_PLAYBACK_MAX_SAFE_VOLUME_PERCENT) {
+        return AIQA_AUDIO_PLAYBACK_DEFAULT_VOLUME_PERCENT;
+    }
+    return s_config_snapshot.user_prefs.volume_percent;
+}
 
 static void secure_zero_bytes(void *data, size_t length)
 {
@@ -269,6 +281,10 @@ static aiqa_event_t load_config_event(void)
              snapshot.config.model,
              snapshot.config.stream ? 1 : 0,
              snapshot.config.max_completion_tokens);
+    ESP_LOGI(TAG, "Loaded assistant profile name=%s gender=%s volume=%u",
+             snapshot.user_prefs.assistant_profile.name,
+             aiqa_assistant_gender_name(snapshot.user_prefs.assistant_profile.gender),
+             (unsigned)snapshot.user_prefs.volume_percent);
     ESP_LOGI(TAG, "Wi-Fi credentials and chat key are present");
     s_config_snapshot = snapshot;
     s_config_snapshot_ready = true;
@@ -451,6 +467,141 @@ static bool handle_language_switch_transcript(const char *transcript)
     aiqa_dialogue_view_set_pet(&s_latest_dialogue, aiqa_language_display_label(language));
     ESP_LOGI("aiqa_language", "Dialogue language switched to %s", aiqa_language_name(language));
     return true;
+}
+
+static const char *weekday_zh(int weekday)
+{
+    static const char *NAMES[] = {"日", "一", "二", "三", "四", "五", "六"};
+    if (weekday < 0 || weekday > 6) {
+        return "?";
+    }
+    return NAMES[weekday];
+}
+
+static bool local_time_ready(struct tm *out_tm)
+{
+    time_t now = time(NULL);
+    if (now < 1700000000) {
+        return false;
+    }
+    return localtime_r(&now, out_tm) != NULL;
+}
+
+static void set_local_reply(const char *reply)
+{
+    s_pending_local_pet_reply = true;
+    (void)snprintf(s_local_pet_reply, sizeof(s_local_pet_reply), "%s", reply);
+    aiqa_dialogue_view_set_pet(&s_latest_dialogue, reply);
+}
+
+static void handle_battery_query_reply(void)
+{
+    board_wave_175c_power_status_t power = {0};
+    esp_err_t ret = board_wave_175c_get_power_status(&power);
+    if (ret != ESP_OK) {
+        set_local_reply("电量读取失败。");
+        return;
+    }
+    if (!power.battery_present) {
+        set_local_reply(power.vbus_good ? "未检测到电池，外部供电中。" : "未检测到电池。");
+        return;
+    }
+
+    char reply[AIQA_CHAT_RESPONSE_TEXT_MAX_LEN] = {0};
+    const char *state = "未充电";
+    if (power.charging_state == BOARD_WAVE_175C_CHARGING_ACTIVE) {
+        state = "正在充电";
+    } else if (power.charging_state == BOARD_WAVE_175C_CHARGING_DONE) {
+        state = "已充满";
+    }
+    (void)snprintf(reply, sizeof(reply), "电量%u%%，%s。", (unsigned)power.percent, state);
+    set_local_reply(reply);
+}
+
+static bool handle_local_command_transcript(const char *transcript)
+{
+    aiqa_local_command_t command = {0};
+    if (!aiqa_local_command_parse(transcript, &command)) {
+        return false;
+    }
+
+    char reply[AIQA_CHAT_RESPONSE_TEXT_MAX_LEN] = {0};
+    if (command.type == AIQA_LOCAL_COMMAND_VOLUME_SET ||
+        command.type == AIQA_LOCAL_COMMAND_VOLUME_RELATIVE) {
+        uint8_t next_volume = 0;
+        if (command.type == AIQA_LOCAL_COMMAND_VOLUME_SET) {
+            next_volume = aiqa_local_command_clamp_volume(command.value);
+        } else {
+            next_volume = aiqa_local_command_clamp_volume((int)current_volume_percent() + command.value);
+        }
+        s_config_snapshot.user_prefs.volume_percent = next_volume;
+        (void)aiqa_config_save_volume_percent(next_volume);
+        (void)aiqa_audio_playback_hw_set_volume(next_volume);
+        (void)snprintf(reply, sizeof(reply), "音量已调到%u%%。", (unsigned)next_volume);
+        set_local_reply(reply);
+        return true;
+    }
+    if (command.type == AIQA_LOCAL_COMMAND_VOLUME_QUERY) {
+        (void)snprintf(reply, sizeof(reply), "当前音量%u%%。", (unsigned)current_volume_percent());
+        set_local_reply(reply);
+        return true;
+    }
+    if (command.type == AIQA_LOCAL_COMMAND_BATTERY_QUERY) {
+        handle_battery_query_reply();
+        return true;
+    }
+    if (command.type == AIQA_LOCAL_COMMAND_DATE_QUERY ||
+        command.type == AIQA_LOCAL_COMMAND_TIME_QUERY ||
+        command.type == AIQA_LOCAL_COMMAND_WEEKDAY_QUERY) {
+        struct tm now_tm = {0};
+        if (!local_time_ready(&now_tm)) {
+            set_local_reply("时间还没同步，请稍后再试。");
+            return true;
+        }
+        if (command.type == AIQA_LOCAL_COMMAND_DATE_QUERY) {
+            (void)snprintf(reply,
+                           sizeof(reply),
+                           "今天是%04d年%d月%d日，星期%s。",
+                           now_tm.tm_year + 1900,
+                           now_tm.tm_mon + 1,
+                           now_tm.tm_mday,
+                           weekday_zh(now_tm.tm_wday));
+        } else if (command.type == AIQA_LOCAL_COMMAND_TIME_QUERY) {
+            (void)snprintf(reply, sizeof(reply), "现在是%02d:%02d。", now_tm.tm_hour, now_tm.tm_min);
+        } else {
+            (void)snprintf(reply, sizeof(reply), "今天是星期%s。", weekday_zh(now_tm.tm_wday));
+        }
+        set_local_reply(reply);
+        return true;
+    }
+    if (command.type == AIQA_LOCAL_COMMAND_SET_NAME) {
+        aiqa_assistant_profile_t profile = s_config_snapshot.user_prefs.assistant_profile;
+        if (!aiqa_assistant_profile_set_name(&profile, command.text)) {
+            set_local_reply("名字太长，请换短一点。");
+            return true;
+        }
+        s_config_snapshot.user_prefs.assistant_profile = profile;
+        (void)aiqa_config_save_assistant_profile(&profile);
+        (void)snprintf(reply, sizeof(reply), "好的，我叫%s。", profile.name);
+        set_local_reply(reply);
+        return true;
+    }
+    if (command.type == AIQA_LOCAL_COMMAND_SET_GENDER) {
+        aiqa_assistant_profile_t profile = s_config_snapshot.user_prefs.assistant_profile;
+        if (!aiqa_assistant_profile_set_gender(&profile, command.gender)) {
+            set_local_reply("性别设置无效。");
+            return true;
+        }
+        s_config_snapshot.user_prefs.assistant_profile = profile;
+        (void)aiqa_config_save_assistant_profile(&profile);
+        (void)snprintf(reply,
+                       sizeof(reply),
+                       "好的，性别已设为%s。",
+                       aiqa_assistant_gender_name(profile.gender));
+        set_local_reply(reply);
+        return true;
+    }
+    return false;
 }
 
 esp_err_t aiqa_runtime_post_event(aiqa_event_t event)
@@ -895,7 +1046,9 @@ static void asr_task(void *arg)
         if (result.status == AIQA_ASR_OK) {
             (void)snprintf(s_latest_transcript, sizeof(s_latest_transcript), "%s", result.text);
             aiqa_dialogue_view_set_user(&s_latest_dialogue, result.text);
-            (void)handle_language_switch_transcript(result.text);
+            if (!handle_language_switch_transcript(result.text)) {
+                (void)handle_local_command_transcript(result.text);
+            }
             ESP_LOGI("aiqa_asr", "ASR transcript ready: %u bytes", (unsigned)strlen(result.text));
         }
 
@@ -1009,6 +1162,7 @@ static void tts_stream_playback_task(void *arg)
     bool started = false;
     esp_err_t playback_ret = ESP_OK;
     aiqa_audio_playback_config_t playback_config = aiqa_audio_playback_default_config();
+    playback_config.volume_percent = current_volume_percent();
 
     while (context->status == ESP_OK) {
         aiqa_tts_playback_slot_t *slot = NULL;
@@ -1329,12 +1483,30 @@ static void chat_task(void *arg)
 
         char prompt_snapshot[AIQA_RUNTIME_CHAT_PROMPT_MAX_LEN] = {0};
         (void)snprintf(prompt_snapshot, sizeof(prompt_snapshot), "%s", command.prompt);
-        char conversation_context[AIQA_CONVERSATION_MEMORY_CONTEXT_MAX_LEN] = {0};
+        char conversation_memory[AIQA_CONVERSATION_MEMORY_CONTEXT_MAX_LEN] = {0};
+        char profile_context[AIQA_ASSISTANT_PROFILE_CONTEXT_MAX_LEN] = {0};
+        char conversation_context[AIQA_CONVERSATION_MEMORY_CONTEXT_MAX_LEN +
+                                  AIQA_ASSISTANT_PROFILE_CONTEXT_MAX_LEN] = {0};
+        (void)aiqa_assistant_profile_build_context(
+            &s_config_snapshot.user_prefs.assistant_profile,
+            profile_context,
+            sizeof(profile_context));
         const bool has_conversation_context =
             aiqa_conversation_memory_build_context(
                 &s_conversation_memory,
-                conversation_context,
-                sizeof(conversation_context));
+                conversation_memory,
+                sizeof(conversation_memory));
+        if (profile_context[0] != '\0' && has_conversation_context) {
+            (void)snprintf(conversation_context,
+                           sizeof(conversation_context),
+                           "%s\n%s",
+                           profile_context,
+                           conversation_memory);
+        } else if (profile_context[0] != '\0') {
+            (void)snprintf(conversation_context, sizeof(conversation_context), "%s", profile_context);
+        } else if (has_conversation_context) {
+            (void)snprintf(conversation_context, sizeof(conversation_context), "%s", conversation_memory);
+        }
 
         (void)aiqa_runtime_post_event((aiqa_event_t){
             .type = AIQA_EVENT_CHAT_STARTED,
@@ -1359,7 +1531,7 @@ static void chat_task(void *arg)
                                        &s_config_snapshot.secrets,
                                        command.prompt,
                                        response_language,
-                                       has_conversation_context ? conversation_context : NULL,
+                                       conversation_context[0] != '\0' ? conversation_context : NULL,
                                        chat_stream_delta_callback,
                                        &stream_context,
                                        &result)
@@ -1368,7 +1540,7 @@ static void chat_task(void *arg)
                                        &s_config_snapshot.secrets,
                                        command.prompt,
                                        response_language,
-                                       has_conversation_context ? conversation_context : NULL,
+                                       conversation_context[0] != '\0' ? conversation_context : NULL,
                                        &result);
         (void)memset(command.prompt, 0, sizeof(command.prompt));
         if (!interaction_generation_is_current(command.generation)) {
@@ -1376,6 +1548,8 @@ static void chat_task(void *arg)
                      (unsigned)command.generation);
             (void)memset(result.text, 0, sizeof(result.text));
             (void)memset(prompt_snapshot, 0, sizeof(prompt_snapshot));
+            (void)memset(conversation_memory, 0, sizeof(conversation_memory));
+            (void)memset(profile_context, 0, sizeof(profile_context));
             (void)memset(conversation_context, 0, sizeof(conversation_context));
             continue;
         }
@@ -1398,6 +1572,8 @@ static void chat_task(void *arg)
             speak_pet_answer(result.text, command.generation);
         }
         (void)memset(prompt_snapshot, 0, sizeof(prompt_snapshot));
+        (void)memset(conversation_memory, 0, sizeof(conversation_memory));
+        (void)memset(profile_context, 0, sizeof(profile_context));
         (void)memset(conversation_context, 0, sizeof(conversation_context));
         (void)memset(result.text, 0, sizeof(result.text));
     }

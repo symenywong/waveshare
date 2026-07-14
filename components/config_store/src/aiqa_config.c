@@ -224,3 +224,125 @@ const char *aiqa_secret_status_name(aiqa_secret_status_t status)
         return "UNKNOWN";
     }
 }
+
+static bool wifi_ssid_is_valid(const char *ssid)
+{
+    const size_t ssid_len = bounded_strlen(ssid, AIQA_MAX_WIFI_SSID_LEN);
+    return ssid_len > 0 && ssid_len < AIQA_MAX_WIFI_SSID_LEN;
+}
+
+static bool wifi_password_is_valid(const char *password)
+{
+    const size_t password_len = bounded_strlen(password, AIQA_MAX_WIFI_PASSWORD_LEN);
+    return password_len >= 8 && password_len <= 63;
+}
+
+static void secure_zero(void *value, size_t value_size)
+{
+    volatile unsigned char *bytes = (volatile unsigned char *)value;
+    while (value_size > 0) {
+        *bytes++ = 0;
+        --value_size;
+    }
+}
+
+aiqa_wifi_update_status_t aiqa_config_prepare_wifi_update(
+    const aiqa_secret_config_t *current,
+    uint32_t current_revision,
+    const aiqa_wifi_update_t *request,
+    aiqa_secret_config_t *updated,
+    uint32_t *next_revision)
+{
+    if (current == NULL || request == NULL || updated == NULL || next_revision == NULL) {
+        return AIQA_WIFI_UPDATE_ERR_INVALID_ARGUMENT;
+    }
+    if (request->base_revision != current_revision) {
+        return AIQA_WIFI_UPDATE_ERR_REVISION_CONFLICT;
+    }
+    if (current_revision == UINT32_MAX) {
+        return AIQA_WIFI_UPDATE_ERR_REVISION_EXHAUSTED;
+    }
+    if (!wifi_ssid_is_valid(request->ssid)) {
+        return AIQA_WIFI_UPDATE_ERR_SSID;
+    }
+
+    switch (request->password_action) {
+    case AIQA_WIFI_PASSWORD_KEEP:
+        if (request->password != NULL && request->password[0] != '\0') {
+            return AIQA_WIFI_UPDATE_ERR_PASSWORD_ACTION;
+        }
+        break;
+    case AIQA_WIFI_PASSWORD_REPLACE: {
+        if (!wifi_password_is_valid(request->password)) {
+            return AIQA_WIFI_UPDATE_ERR_PASSWORD;
+        }
+        break;
+    }
+    case AIQA_WIFI_PASSWORD_CLEAR:
+        if (request->password != NULL && request->password[0] != '\0') {
+            return AIQA_WIFI_UPDATE_ERR_PASSWORD_ACTION;
+        }
+        break;
+    default:
+        return AIQA_WIFI_UPDATE_ERR_PASSWORD_ACTION;
+    }
+
+    aiqa_secret_config_t candidate = *current;
+    const size_t ssid_len = bounded_strlen(request->ssid, AIQA_MAX_WIFI_SSID_LEN);
+    (void)memset(candidate.wifi_ssid, 0, sizeof(candidate.wifi_ssid));
+    (void)memcpy(candidate.wifi_ssid, request->ssid, ssid_len);
+    candidate.wifi_ssid[ssid_len] = '\0';
+    if (request->password_action == AIQA_WIFI_PASSWORD_REPLACE) {
+        const size_t password_len = bounded_strlen(request->password, AIQA_MAX_WIFI_PASSWORD_LEN);
+        (void)memset(candidate.wifi_password, 0, sizeof(candidate.wifi_password));
+        (void)memcpy(candidate.wifi_password, request->password, password_len);
+        candidate.wifi_password[password_len] = '\0';
+    } else if (request->password_action == AIQA_WIFI_PASSWORD_CLEAR) {
+        (void)memset(candidate.wifi_password, 0, sizeof(candidate.wifi_password));
+    }
+
+    *updated = candidate;
+    *next_revision = current_revision + 1;
+    secure_zero(&candidate, sizeof(candidate));
+    return AIQA_WIFI_UPDATE_OK;
+}
+
+bool aiqa_config_build_public_wifi_view(
+    const aiqa_secret_config_t *secrets,
+    uint32_t revision,
+    aiqa_public_wifi_config_t *out_view)
+{
+    if (secrets == NULL || out_view == NULL || !wifi_ssid_is_valid(secrets->wifi_ssid)) {
+        return false;
+    }
+
+    aiqa_public_wifi_config_t view = {.revision = revision};
+    const size_t ssid_len = bounded_strlen(secrets->wifi_ssid, sizeof(view.ssid));
+    (void)memcpy(view.ssid, secrets->wifi_ssid, ssid_len);
+    view.ssid[ssid_len] = '\0';
+    view.has_password = secrets->wifi_password[0] != '\0';
+    *out_view = view;
+    return true;
+}
+
+const char *aiqa_wifi_update_status_name(aiqa_wifi_update_status_t status)
+{
+    switch (status) {
+    case AIQA_WIFI_UPDATE_OK:
+        return "OK";
+    case AIQA_WIFI_UPDATE_ERR_INVALID_ARGUMENT:
+        return "INVALID_ARGUMENT";
+    case AIQA_WIFI_UPDATE_ERR_REVISION_CONFLICT:
+        return "REVISION_CONFLICT";
+    case AIQA_WIFI_UPDATE_ERR_REVISION_EXHAUSTED:
+        return "REVISION_EXHAUSTED";
+    case AIQA_WIFI_UPDATE_ERR_SSID:
+        return "SSID";
+    case AIQA_WIFI_UPDATE_ERR_PASSWORD:
+        return "PASSWORD";
+    case AIQA_WIFI_UPDATE_ERR_PASSWORD_ACTION:
+        return "PASSWORD_ACTION";
+    default:
+        return "UNKNOWN";
+    }
+}
