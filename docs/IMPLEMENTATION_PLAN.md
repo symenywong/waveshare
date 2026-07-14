@@ -187,17 +187,67 @@ Implemented:
   random-source failure, Finished confirmation, AEAD tampering, outer-frame
   substitution, direction/session substitution, and replay rejection under
   AddressSanitizer and UndefinedBehaviorSanitizer.
+- The isolated device-owned pairing lifecycle now defaults closed and requires a
+  consumed local-presence event before it displays an eight-digit one-time code.
+  Code generation uses rejection sampling, preserves leading zeroes, and keeps
+  the code only in volatile memory and the local display path.
+- Each locally opened window is bound to the current USB connection generation.
+  A different connection cannot begin the handshake, and disconnecting the
+  bound connection clears the displayed code and closes the window even before
+  PAKE starts.
+- The pairing window lasts 120 seconds, each handshake step has a 15-second
+  deadline, and only one handshake may be active. An online attempt is reserved
+  through the persistence port before PAKE processing begins; disconnects,
+  timeouts, protocol failures, and reboots do not refund it.
+- Five failed attempts produce a persistent lockout. Recovery requires a
+  separate consumed local-reset event and a successful persistent record reset.
+  Corrupt records and clock, entropy, display, or persistence failures all fail
+  closed.
+- A failed or abandoned attempt closes its pairing window, so every retry
+  requires a new physical local-presence action. This hard local gate plus the
+  fifth-attempt persistent lock is the selected policy instead of a remotely
+  retryable cooldown/backoff sequence.
+- Client Finished verification moves the lifecycle to a pending state only. A
+  session becomes active after the device Finished message is fully sent and the
+  attempt counter is durably reset. Active sessions enforce a five-minute idle
+  timeout and a 30-minute absolute timeout through an injected monotonic clock.
+- Host lifecycle tests use injected clock, entropy, display, presence,
+  persistence, and connection-revocation ports. They cover exact timeout
+  boundaries, persistent reboot lockout, single-handshake ownership, failure
+  cleanup, and successful session activation under AddressSanitizer and
+  UndefinedBehaviorSanitizer; lifecycle line and branch coverage both exceed
+  80%.
+- Display clearing is now an observable lifecycle operation. A failed show or
+  clear synchronously revokes the bound connection and enters `FAULT`; it never
+  resumes pairing or refunds the reserved attempt. A later physical reset may
+  retry the clear operation before resetting persistent state.
+- The production ESP-IDF NVS adapter uses the independent `aiqa_pair` namespace
+  and one `u64` `lock` item encoding only `{version, attempts_used}`. Every store
+  performs set, commit, and close; a successful commit is followed by an
+  independent read-only reopen and exact readback.
+  A commit error always fails closed even when the write may already have
+  reached flash; restart then converges from the durable value. A successful
+  commit is accepted only when independent readback matches exactly.
+- Host power-cut tests cover unapplied commit errors, applied commit errors,
+  applied-but-unreadable commits, corrupt version/attempt values, type mismatch,
+  reset persistence, and reboot round-trips. Both lifecycle and NVS adapter line
+  and branch coverage exceed 80%.
 
 Next:
 
-- Add the device-owned pairing lifecycle around the isolated cryptographic core:
-  a locally initiated one-time eight-digit code, production entropy/DRBG,
-  120-second expiry, bounded online attempts, persistent lockout accounting,
-  disconnect cleanup, and an explicit local reset path.
+- Add the remaining reviewed ESP-IDF adapters: seed a dedicated CTR-DRBG from
+  the bootloader entropy source before runtime RF/ADC/I2S tasks start, then add
+  monotonic time, acknowledged local display/clear, and synchronous connection
+  revocation. Pairing codes, nonces, and keys must never enter NVS or logs.
+- Add a BOOT-button local pairing gesture that cannot collide with the existing
+  long-press PTT behavior, plus an explicit local lockout-reset gesture and UI.
 - Add strict pairing RPC messages and two-way Finished exchange to the USB owner.
   Do not activate a session until the client proof is verified and the device
-  proof has been fully sent. Status, Wi-Fi, provider, key, prompt, and debug
-  methods remain closed until this boundary is complete.
+  proof has been fully sent. The USB owner must atomically install a confirmed
+  secure-channel generation; runtime authorization must require both that
+  generation and lifecycle `ACTIVE`, never `ACTIVE` alone. Status, Wi-Fi,
+  provider, key, prompt, and debug methods remain closed until this boundary is
+  complete.
 - Supply the browser through an audited ECJPAKE WASM/native provider boundary;
   do not implement elliptic-curve PAKE arithmetic directly in TypeScript.
 - Add the authenticated operation polling adapter, then optionally reuse the same

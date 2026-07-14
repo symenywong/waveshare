@@ -1553,6 +1553,147 @@ class CContractTests(unittest.TestCase):
             ["components/board_wave_175c/include"],
         )
 
+    def test_pet_sprite_original_blue_character_design_contract(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "board_wave_175c_pet_sprite.h"
+                #include <assert.h>
+                #include <stddef.h>
+                #include <stdint.h>
+
+                #define PIXEL_AT(pixels, x, y) \\
+                    ((pixels)[(size_t)(y) * BOARD_WAVE_175C_PET_SPRITE_WIDTH + (size_t)(x)])
+
+                enum {
+                    COLOR_OUTLINE = 0x114A,
+                    COLOR_BLUE_DARK = 0x22B4,
+                    COLOR_BLUE_MID = 0x3BF9,
+                    COLOR_BLUE_LIGHT = 0x6D5C,
+                    COLOR_CREAM = 0xF6D4,
+                    COLOR_CORAL = 0xFB8D,
+                };
+
+                static int rgb565_luma(uint16_t color) {
+                    const int red = (((color >> 11) & 0x1f) * 255) / 31;
+                    const int green = (((color >> 5) & 0x3f) * 255) / 63;
+                    const int blue = ((color & 0x1f) * 255) / 31;
+                    return red * 2126 + green * 7152 + blue * 722;
+                }
+
+                static size_t count_color_in_rect(
+                    const uint16_t *pixels,
+                    uint16_t color,
+                    int x_start,
+                    int y_start,
+                    int x_end,
+                    int y_end) {
+                    size_t count = 0;
+                    for (int y = y_start; y < y_end; ++y) {
+                        for (int x = x_start; x < x_end; ++x) {
+                            if (PIXEL_AT(pixels, x, y) == color) {
+                                ++count;
+                            }
+                        }
+                    }
+                    return count;
+                }
+
+                static int first_visible_y_in_rect(
+                    const uint16_t *pixels,
+                    int x_start,
+                    int y_start,
+                    int x_end,
+                    int y_end) {
+                    for (int y = y_start; y < y_end; ++y) {
+                        for (int x = x_start; x < x_end; ++x) {
+                            if (PIXEL_AT(pixels, x, y) != 0) {
+                                return y;
+                            }
+                        }
+                    }
+                    return -1;
+                }
+
+                static void assert_rect_uses_only_blue_fur(
+                    const uint16_t *pixels,
+                    int x_start,
+                    int y_start,
+                    int x_end,
+                    int y_end) {
+                    for (int y = y_start; y < y_end; ++y) {
+                        for (int x = x_start; x < x_end; ++x) {
+                            const uint16_t color = PIXEL_AT(pixels, x, y);
+                            assert(color == COLOR_BLUE_DARK ||
+                                   color == COLOR_BLUE_MID ||
+                                   color == COLOR_BLUE_LIGHT);
+                        }
+                    }
+                }
+
+                static void assert_sprite_border_is_clear(const uint16_t *pixels) {
+                    const int width = BOARD_WAVE_175C_PET_SPRITE_WIDTH;
+                    const int height = BOARD_WAVE_175C_PET_SPRITE_HEIGHT;
+                    for (int x = 0; x < width; ++x) {
+                        assert(PIXEL_AT(pixels, x, 0) == 0);
+                        assert(PIXEL_AT(pixels, x, height - 1) == 0);
+                    }
+                    for (int y = 0; y < height; ++y) {
+                        assert(PIXEL_AT(pixels, 0, y) == 0);
+                        assert(PIXEL_AT(pixels, width - 1, y) == 0);
+                    }
+                }
+
+                int main(void) {
+                    assert(rgb565_luma(COLOR_OUTLINE) < rgb565_luma(COLOR_BLUE_DARK));
+                    assert(rgb565_luma(COLOR_BLUE_DARK) < rgb565_luma(COLOR_BLUE_MID));
+                    assert(rgb565_luma(COLOR_BLUE_MID) < rgb565_luma(COLOR_BLUE_LIGHT));
+                    assert((COLOR_BLUE_MID & 0x1f) > ((COLOR_BLUE_MID >> 11) & 0x1f));
+                    assert(((COLOR_CORAL >> 11) & 0x1f) > (COLOR_CORAL & 0x1f));
+
+                    static uint16_t pixels[
+                        BOARD_WAVE_175C_PET_SPRITE_WIDTH * BOARD_WAVE_175C_PET_SPRITE_HEIGHT];
+                    const board_wave_175c_pet_sprite_t *idle =
+                        board_wave_175c_pet_sprite_for_expression(BOARD_WAVE_175C_PET_EXPRESSION_IDLE);
+                    assert(board_wave_175c_pet_sprite_render(
+                        idle, 0, pixels, sizeof(pixels) / sizeof(pixels[0])));
+
+                    const int left_ear_top = first_visible_y_in_rect(pixels, 28, 4, 72, 60);
+                    const int right_ear_top = first_visible_y_in_rect(pixels, 88, 4, 136, 60);
+                    assert(left_ear_top >= 4);
+                    assert(right_ear_top >= 4);
+                    assert(right_ear_top - left_ear_top >= 8);
+
+                    assert_rect_uses_only_blue_fur(pixels, 70, 28, 91, 51);
+                    assert(count_color_in_rect(pixels, COLOR_CREAM, 70, 28, 91, 51) == 0);
+                    assert(count_color_in_rect(pixels, COLOR_CORAL, 70, 28, 91, 51) == 0);
+                    assert(count_color_in_rect(pixels, COLOR_BLUE_DARK, 108, 70, 159, 130) >= 20);
+                    assert(count_color_in_rect(pixels, COLOR_BLUE_LIGHT, 108, 70, 159, 130) >= 20);
+                    assert(count_color_in_rect(pixels, COLOR_CORAL, 132, 66, 159, 104) >= 25);
+
+                    for (int expression = 0;
+                         expression < BOARD_WAVE_175C_PET_EXPRESSION_COUNT;
+                         ++expression) {
+                        const board_wave_175c_pet_sprite_t *sprite =
+                            board_wave_175c_pet_sprite_for_expression(
+                                (board_wave_175c_pet_expression_t)expression);
+                        for (size_t frame = 0; frame < sprite->frame_count; ++frame) {
+                            assert(board_wave_175c_pet_sprite_render(
+                                sprite, frame, pixels, sizeof(pixels) / sizeof(pixels[0])));
+                            assert_sprite_border_is_clear(pixels);
+                        }
+                    }
+                    return 0;
+                }
+                """
+            ),
+            [
+                "components/board_wave_175c/src/board_wave_175c_display_contract.c",
+                "components/board_wave_175c/src/board_wave_175c_pet_sprite.c",
+            ],
+            ["components/board_wave_175c/include"],
+        )
+
     def test_audio_capture_budget_contract(self):
         self.compile_and_run(
             textwrap.dedent(
