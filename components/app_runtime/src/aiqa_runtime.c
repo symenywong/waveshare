@@ -30,6 +30,7 @@
 #include "freertos/task.h"
 #include "freertos/projdefs.h"
 #include <stdio.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <time.h>
 static const char *TAG = "aiqa_runtime";
@@ -62,9 +63,14 @@ typedef struct {
     aiqa_error_code_t error;
     aiqa_dialogue_view_t dialogue;
 } aiqa_ui_message_t;
-typedef enum { AIQA_NET_COMMAND_CONNECT = 0 } aiqa_net_command_type_t;
+typedef enum {
+    AIQA_NET_COMMAND_CONNECT = 0,
+    AIQA_NET_COMMAND_DISCONNECT,
+} aiqa_net_command_type_t;
 typedef struct {
     aiqa_net_command_type_t type;
+    uint32_t generation;
+    aiqa_secret_config_t secrets;
 } aiqa_net_command_t;
 typedef enum {
     AIQA_CHAT_COMMAND_USER_PROMPT = 0,
@@ -120,25 +126,91 @@ typedef struct {
     uint16_t channels;
 } aiqa_asr_command_t;
 static QueueHandle_t s_app_queue, s_ui_queue, s_net_queue, s_chat_queue, s_audio_queue, s_asr_queue;
+static SemaphoreHandle_t s_config_mutex;
 static aiqa_config_snapshot_t s_config_snapshot;
 static bool s_config_snapshot_ready;
 static bool s_startup_audio_test_done;
 static bool s_pending_local_pet_reply;
 static aiqa_dialogue_language_t s_dialogue_language = AIQA_DIALOGUE_LANGUAGE_CHINESE;
-static uint32_t s_interaction_generation = 1;
+static atomic_uint_least32_t s_interaction_generation = ATOMIC_VAR_INIT(1);
 static char s_latest_transcript[AIQA_ASR_RESPONSE_TEXT_MAX_LEN];
 static char s_local_pet_reply[AIQA_CHAT_RESPONSE_TEXT_MAX_LEN];
 static aiqa_dialogue_view_t s_latest_dialogue;
 static aiqa_conversation_memory_t s_conversation_memory;
 static aiqa_runtime_recording_t s_recording;
 
+static bool copy_config_snapshot(aiqa_config_snapshot_t *snapshot)
+{
+    if (snapshot == NULL || s_config_mutex == NULL) {
+        return false;
+    }
+    aiqa_config_snapshot_secure_clear(snapshot);
+    if (xSemaphoreTake(s_config_mutex, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+    const bool ready = s_config_snapshot_ready;
+    if (ready) {
+        *snapshot = s_config_snapshot;
+    }
+    (void)xSemaphoreGive(s_config_mutex);
+    return ready;
+}
+
+static void store_config_snapshot(const aiqa_config_snapshot_t *snapshot)
+{
+    if (snapshot == NULL || s_config_mutex == NULL ||
+        xSemaphoreTake(s_config_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    s_config_snapshot = *snapshot;
+    s_config_snapshot_ready = true;
+    (void)xSemaphoreGive(s_config_mutex);
+}
+
+static void clear_config_snapshot(void)
+{
+    if (s_config_mutex == NULL || xSemaphoreTake(s_config_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    s_config_snapshot_ready = false;
+    aiqa_config_snapshot_secure_clear(&s_config_snapshot);
+    (void)xSemaphoreGive(s_config_mutex);
+}
+
+static void update_snapshot_volume(uint8_t volume_percent)
+{
+    if (s_config_mutex == NULL || xSemaphoreTake(s_config_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    if (s_config_snapshot_ready) {
+        s_config_snapshot.user_prefs.volume_percent = volume_percent;
+    }
+    (void)xSemaphoreGive(s_config_mutex);
+}
+
+static void update_snapshot_profile(const aiqa_assistant_profile_t *profile)
+{
+    if (profile == NULL || s_config_mutex == NULL ||
+        xSemaphoreTake(s_config_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    if (s_config_snapshot_ready) {
+        s_config_snapshot.user_prefs.assistant_profile = *profile;
+    }
+    (void)xSemaphoreGive(s_config_mutex);
+}
+
 static uint8_t current_volume_percent(void)
 {
-    if (!s_config_snapshot_ready ||
-        s_config_snapshot.user_prefs.volume_percent > AIQA_AUDIO_PLAYBACK_MAX_SAFE_VOLUME_PERCENT) {
+    aiqa_config_snapshot_t snapshot = {0};
+    if (!copy_config_snapshot(&snapshot) ||
+        snapshot.user_prefs.volume_percent > AIQA_AUDIO_PLAYBACK_MAX_SAFE_VOLUME_PERCENT) {
+        aiqa_config_snapshot_secure_clear(&snapshot);
         return AIQA_AUDIO_PLAYBACK_DEFAULT_VOLUME_PERCENT;
     }
-    return s_config_snapshot.user_prefs.volume_percent;
+    const uint8_t volume = snapshot.user_prefs.volume_percent;
+    aiqa_config_snapshot_secure_clear(&snapshot);
+    return volume;
 }
 
 static void secure_zero_bytes(void *data, size_t length)
@@ -152,12 +224,12 @@ static void secure_zero_bytes(void *data, size_t length)
 
 static uint32_t current_interaction_generation(void)
 {
-    return s_interaction_generation;
+    return atomic_load_explicit(&s_interaction_generation, memory_order_acquire);
 }
 
 static bool interaction_generation_is_current(uint32_t generation)
 {
-    return generation != 0 && generation == s_interaction_generation;
+    return generation != 0 && generation == current_interaction_generation();
 }
 
 static bool event_is_interaction_scoped(aiqa_event_type_t type)
@@ -190,9 +262,11 @@ static bool should_ignore_stale_interaction_event(aiqa_event_t event)
 
 static uint32_t begin_new_interaction(void)
 {
-    s_interaction_generation += 1;
-    if (s_interaction_generation == 0) {
-        s_interaction_generation = 1;
+    uint32_t generation =
+        atomic_fetch_add_explicit(&s_interaction_generation, 1, memory_order_acq_rel) + 1U;
+    if (generation == 0) {
+        generation = 1;
+        atomic_store_explicit(&s_interaction_generation, generation, memory_order_release);
     }
     if (s_chat_queue != NULL) {
         (void)xQueueReset(s_chat_queue);
@@ -204,8 +278,8 @@ static uint32_t begin_new_interaction(void)
     aiqa_asr_cancel_active_request();
     aiqa_chat_cancel_active_request();
     aiqa_tts_cancel_active_request();
-    ESP_LOGI(TAG, "Started interaction generation %u", (unsigned)s_interaction_generation);
-    return s_interaction_generation;
+    ESP_LOGI(TAG, "Started interaction generation %u", (unsigned)generation);
+    return generation;
 }
 
 static void clear_asr_command_pcm(aiqa_asr_command_t *command)
@@ -235,6 +309,7 @@ static aiqa_event_t load_config_event(void)
     esp_err_t load_ret = aiqa_config_load_from_nvs(&snapshot);
     if (load_ret != ESP_OK) {
         ESP_LOGE(TAG, "NVS config load failed: %s", esp_err_to_name(load_ret));
+        aiqa_config_snapshot_secure_clear(&snapshot);
         return (aiqa_event_t){
             .type = AIQA_EVENT_CONFIG_CORRUPT,
             .error = AIQA_ERROR_CONFIG_CORRUPT,
@@ -242,7 +317,8 @@ static aiqa_event_t load_config_event(void)
         };
     }
     if (!snapshot.namespace_found) {
-        ESP_LOGW(TAG, "NVS namespace 'aiqa' is missing; run provisioning before network use");
+        ESP_LOGW(TAG, "No active device configuration; run provisioning before network use");
+        aiqa_config_snapshot_secure_clear(&snapshot);
         return (aiqa_event_t){
             .type = AIQA_EVENT_CONFIG_MISSING,
             .error = AIQA_ERROR_CONFIG_MISSING,
@@ -250,21 +326,25 @@ static aiqa_event_t load_config_event(void)
         };
     }
     if (snapshot.config_status != AIQA_CONFIG_OK) {
+        const uint32_t status_value = (uint32_t)snapshot.config_status;
         ESP_LOGE(TAG, "Config validation failed: %s",
                  aiqa_config_status_name(snapshot.config_status));
+        aiqa_config_snapshot_secure_clear(&snapshot);
         return (aiqa_event_t){
             .type = AIQA_EVENT_CONFIG_CORRUPT,
             .error = AIQA_ERROR_CONFIG_CORRUPT,
-            .value = (uint32_t)snapshot.config_status,
+            .value = status_value,
         };
     }
     if (snapshot.secret_status != AIQA_SECRET_OK) {
+        const uint32_t status_value = (uint32_t)snapshot.secret_status;
         ESP_LOGE(TAG, "Secret validation failed: %s",
                  aiqa_secret_status_name(snapshot.secret_status));
+        aiqa_config_snapshot_secure_clear(&snapshot);
         return (aiqa_event_t){
             .type = AIQA_EVENT_CONFIG_CORRUPT,
             .error = AIQA_ERROR_CONFIG_CORRUPT,
-            .value = (uint32_t)snapshot.secret_status,
+            .value = status_value,
         };
     }
 
@@ -286,8 +366,8 @@ static aiqa_event_t load_config_event(void)
              aiqa_assistant_gender_name(snapshot.user_prefs.assistant_profile.gender),
              (unsigned)snapshot.user_prefs.volume_percent);
     ESP_LOGI(TAG, "Wi-Fi credentials and chat key are present");
-    s_config_snapshot = snapshot;
-    s_config_snapshot_ready = true;
+    store_config_snapshot(&snapshot);
+    aiqa_config_snapshot_secure_clear(&snapshot);
     return (aiqa_event_t){
         .type = AIQA_EVENT_CONFIG_READY,
         .error = AIQA_ERROR_NONE,
@@ -295,15 +375,26 @@ static aiqa_event_t load_config_event(void)
     };
 }
 
-static esp_err_t post_net_command(aiqa_net_command_t command)
+static esp_err_t post_net_command(const aiqa_net_command_t *command)
 {
-    if (s_net_queue == NULL) {
+    if (s_net_queue == NULL || command == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (xQueueSend(s_net_queue, &command, pdMS_TO_TICKS(100)) != pdTRUE) {
+    if (xQueueSend(s_net_queue, command, pdMS_TO_TICKS(100)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
     return ESP_OK;
+}
+
+static void clear_pending_net_commands(void)
+{
+    if (s_net_queue == NULL) {
+        return;
+    }
+    aiqa_net_command_t pending = {0};
+    while (xQueueReceive(s_net_queue, &pending, 0) == pdTRUE) {
+        secure_zero_bytes(&pending, sizeof(pending));
+    }
 }
 
 static esp_err_t post_chat_command(aiqa_chat_command_t command)
@@ -534,7 +625,7 @@ static bool handle_local_command_transcript(const char *transcript)
         } else {
             next_volume = aiqa_local_command_clamp_volume((int)current_volume_percent() + command.value);
         }
-        s_config_snapshot.user_prefs.volume_percent = next_volume;
+        update_snapshot_volume(next_volume);
         (void)aiqa_config_save_volume_percent(next_volume);
         (void)aiqa_audio_playback_hw_set_volume(next_volume);
         (void)snprintf(reply, sizeof(reply), "音量已调到%u%%。", (unsigned)next_volume);
@@ -575,24 +666,36 @@ static bool handle_local_command_transcript(const char *transcript)
         return true;
     }
     if (command.type == AIQA_LOCAL_COMMAND_SET_NAME) {
-        aiqa_assistant_profile_t profile = s_config_snapshot.user_prefs.assistant_profile;
+        aiqa_config_snapshot_t snapshot = {0};
+        if (!copy_config_snapshot(&snapshot)) {
+            set_local_reply("配置尚未就绪。");
+            return true;
+        }
+        aiqa_assistant_profile_t profile = snapshot.user_prefs.assistant_profile;
+        aiqa_config_snapshot_secure_clear(&snapshot);
         if (!aiqa_assistant_profile_set_name(&profile, command.text)) {
             set_local_reply("名字太长，请换短一点。");
             return true;
         }
-        s_config_snapshot.user_prefs.assistant_profile = profile;
+        update_snapshot_profile(&profile);
         (void)aiqa_config_save_assistant_profile(&profile);
         (void)snprintf(reply, sizeof(reply), "好的，我叫%s。", profile.name);
         set_local_reply(reply);
         return true;
     }
     if (command.type == AIQA_LOCAL_COMMAND_SET_GENDER) {
-        aiqa_assistant_profile_t profile = s_config_snapshot.user_prefs.assistant_profile;
+        aiqa_config_snapshot_t snapshot = {0};
+        if (!copy_config_snapshot(&snapshot)) {
+            set_local_reply("配置尚未就绪。");
+            return true;
+        }
+        aiqa_assistant_profile_t profile = snapshot.user_prefs.assistant_profile;
+        aiqa_config_snapshot_secure_clear(&snapshot);
         if (!aiqa_assistant_profile_set_gender(&profile, command.gender)) {
             set_local_reply("性别设置无效。");
             return true;
         }
-        s_config_snapshot.user_prefs.assistant_profile = profile;
+        update_snapshot_profile(&profile);
         (void)aiqa_config_save_assistant_profile(&profile);
         (void)snprintf(reply,
                        sizeof(reply),
@@ -680,12 +783,29 @@ static void app_state_task(void *arg)
             post_ui_state(transition.next_state, transition.error);
         }
         if (event.type == AIQA_EVENT_FACTORY_RESET) {
+            (void)begin_new_interaction();
+            if (s_net_queue != NULL) {
+                clear_pending_net_commands();
+                aiqa_net_command_t disconnect = {.type = AIQA_NET_COMMAND_DISCONNECT};
+                (void)post_net_command(&disconnect);
+            }
+            clear_config_snapshot();
             esp_err_t erase_ret = aiqa_config_erase_nvs_namespace();
             if (erase_ret != ESP_OK) {
                 ESP_LOGE(TAG, "Factory reset failed: %s", esp_err_to_name(erase_ret));
             } else {
-                ESP_LOGW(TAG, "Factory reset erased NVS namespace 'aiqa'");
+                ESP_LOGW(TAG, "Factory reset erased legacy, A/B, and metadata NVS namespaces");
             }
+            aiqa_event_t reset_result = {
+                .type = erase_ret == ESP_OK ? AIQA_EVENT_CONFIG_MISSING : AIQA_EVENT_CONFIG_CORRUPT,
+                .error = erase_ret == ESP_OK ? AIQA_ERROR_CONFIG_MISSING : AIQA_ERROR_CONFIG_CORRUPT,
+                .value = (uint32_t)erase_ret,
+            };
+            post_ret = aiqa_runtime_post_event(reset_result);
+            if (post_ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to post factory reset result: %s", esp_err_to_name(post_ret));
+            }
+            continue;
         }
         if (transition.next_state == AIQA_STATE_CONFIG_CHECK) {
             aiqa_event_t next = load_config_event();
@@ -694,7 +814,8 @@ static void app_state_task(void *arg)
                 ESP_LOGE(TAG, "Failed to post config event: %s", esp_err_to_name(post_ret));
             }
         } else if (transition.next_state == AIQA_STATE_NETWORK_CONNECTING) {
-            if (!s_config_snapshot_ready) {
+            aiqa_config_snapshot_t snapshot = {0};
+            if (!copy_config_snapshot(&snapshot)) {
                 ESP_LOGE(TAG, "Network requested before config snapshot was loaded");
                 aiqa_event_t failed = {
                     .type = AIQA_EVENT_CONFIG_CORRUPT,
@@ -708,8 +829,12 @@ static void app_state_task(void *arg)
             } else {
                 aiqa_net_command_t command = {
                     .type = AIQA_NET_COMMAND_CONNECT,
+                    .generation = current_interaction_generation(),
+                    .secrets = snapshot.secrets,
                 };
-                esp_err_t net_ret = post_net_command(command);
+                aiqa_config_snapshot_secure_clear(&snapshot);
+                esp_err_t net_ret = post_net_command(&command);
+                secure_zero_bytes(&command.secrets, sizeof(command.secrets));
                 if (net_ret != ESP_OK) {
                     ESP_LOGE(TAG, "Failed to post network command: %s", esp_err_to_name(net_ret));
                     aiqa_event_t failed = {
@@ -955,12 +1080,26 @@ static void net_task(void *arg)
             continue;
         }
 
+        if (command.type == AIQA_NET_COMMAND_DISCONNECT) {
+            esp_err_t ret = aiqa_net_disconnect_wifi();
+            if (ret != ESP_OK) {
+                ESP_LOGE("aiqa_net", "Wi-Fi disconnect failed: %s", esp_err_to_name(ret));
+            }
+            continue;
+        }
         if (command.type != AIQA_NET_COMMAND_CONNECT) {
             continue;
         }
 
         aiqa_net_policy_t policy = aiqa_net_default_policy();
-        esp_err_t ret = aiqa_net_connect_wifi_and_sync_time(&s_config_snapshot.secrets, &policy);
+        esp_err_t ret = aiqa_net_connect_wifi_and_sync_time(&command.secrets, &policy);
+        secure_zero_bytes(&command.secrets, sizeof(command.secrets));
+        if (!interaction_generation_is_current(command.generation)) {
+            ESP_LOGI("aiqa_net", "Dropping stale network result generation=%u",
+                     (unsigned)command.generation);
+            (void)aiqa_net_disconnect_wifi();
+            continue;
+        }
         aiqa_event_t event = {
             .type = ret == ESP_OK ? AIQA_EVENT_NETWORK_READY : AIQA_EVENT_NETWORK_FAILED,
             .error = ret == ESP_OK ? AIQA_ERROR_NONE : AIQA_ERROR_NETWORK_FAILED,
@@ -997,7 +1136,8 @@ static void asr_task(void *arg)
             clear_asr_command_pcm(&command);
             continue;
         }
-        if (!s_config_snapshot_ready) {
+        aiqa_config_snapshot_t config_snapshot = {0};
+        if (!copy_config_snapshot(&config_snapshot)) {
             ESP_LOGE("aiqa_asr", "ASR requested before config snapshot was loaded");
             clear_asr_command_pcm(&command);
             (void)aiqa_runtime_post_event((aiqa_event_t){
@@ -1025,17 +1165,18 @@ static void asr_task(void *arg)
                 .channels = command.channels,
             };
             asr_ret = aiqa_asr_transcribe_pcm_wav_once(
-                &s_config_snapshot.config,
-                &s_config_snapshot.secrets,
+                &config_snapshot.config,
+                &config_snapshot.secrets,
                 &audio,
                 &result);
         } else {
             asr_ret = aiqa_asr_transcribe_once(
-                &s_config_snapshot.config,
-                &s_config_snapshot.secrets,
+                &config_snapshot.config,
+                &config_snapshot.secrets,
                 command.audio_ref,
                 &result);
         }
+        aiqa_config_snapshot_secure_clear(&config_snapshot);
         clear_asr_command_pcm(&command);
         if (!interaction_generation_is_current(command.generation)) {
             ESP_LOGI("aiqa_asr", "Dropping stale ASR result generation=%u",
@@ -1354,9 +1495,13 @@ static void delete_tts_playback_context_resources(aiqa_tts_playback_context_t *c
     }
 }
 
-static void speak_pet_answer(const char *answer, uint32_t generation)
+static void speak_pet_answer(
+    const char *answer,
+    uint32_t generation,
+    const aiqa_config_t *config,
+    const aiqa_secret_config_t *secrets)
 {
-    if (answer == NULL || answer[0] == '\0') {
+    if (answer == NULL || answer[0] == '\0' || config == NULL || secrets == NULL) {
         return;
     }
     if (!interaction_generation_is_current(generation)) {
@@ -1405,8 +1550,8 @@ static void speak_pet_answer(const char *answer, uint32_t generation)
 
     aiqa_tts_result_t tts_result = {0};
     esp_err_t tts_ret = aiqa_tts_speak_streaming(
-        &s_config_snapshot.config,
-        &s_config_snapshot.secrets,
+        config,
+        secrets,
         answer,
         tts_playback_audio_callback,
         &playback_context,
@@ -1454,10 +1599,26 @@ static void chat_task(void *arg)
             (void)memset(command.prompt, 0, sizeof(command.prompt));
             continue;
         }
+        aiqa_config_snapshot_t config_snapshot = {0};
+        if (!copy_config_snapshot(&config_snapshot)) {
+            ESP_LOGE("aiqa_chat", "Chat requested before config snapshot was loaded");
+            (void)memset(command.prompt, 0, sizeof(command.prompt));
+            (void)aiqa_runtime_post_event((aiqa_event_t){
+                .type = AIQA_EVENT_CONFIG_CORRUPT,
+                .error = AIQA_ERROR_CONFIG_CORRUPT,
+                .value = command.generation,
+            });
+            continue;
+        }
         if (command.type == AIQA_CHAT_COMMAND_LOCAL_PET_REPLY) {
             ESP_LOGI("aiqa_chat", "Playing local pet reply");
-            speak_pet_answer(command.prompt, command.generation);
+            speak_pet_answer(
+                command.prompt,
+                command.generation,
+                &config_snapshot.config,
+                &config_snapshot.secrets);
             (void)memset(command.prompt, 0, sizeof(command.prompt));
+            aiqa_config_snapshot_secure_clear(&config_snapshot);
             if (interaction_generation_is_current(command.generation)) {
                 (void)aiqa_runtime_post_event((aiqa_event_t){
                     .type = AIQA_EVENT_CHAT_DONE,
@@ -1469,15 +1630,7 @@ static void chat_task(void *arg)
         }
         if (command.type != AIQA_CHAT_COMMAND_USER_PROMPT) {
             (void)memset(command.prompt, 0, sizeof(command.prompt));
-            continue;
-        }
-        if (!s_config_snapshot_ready) {
-            ESP_LOGE("aiqa_chat", "Chat requested before config snapshot was loaded");
-            (void)aiqa_runtime_post_event((aiqa_event_t){
-                .type = AIQA_EVENT_CONFIG_CORRUPT,
-                .error = AIQA_ERROR_CONFIG_CORRUPT,
-                .value = command.generation,
-            });
+            aiqa_config_snapshot_secure_clear(&config_snapshot);
             continue;
         }
 
@@ -1488,7 +1641,7 @@ static void chat_task(void *arg)
         char conversation_context[AIQA_CONVERSATION_MEMORY_CONTEXT_MAX_LEN +
                                   AIQA_ASSISTANT_PROFILE_CONTEXT_MAX_LEN] = {0};
         (void)aiqa_assistant_profile_build_context(
-            &s_config_snapshot.user_prefs.assistant_profile,
+            &config_snapshot.user_prefs.assistant_profile,
             profile_context,
             sizeof(profile_context));
         const bool has_conversation_context =
@@ -1520,15 +1673,15 @@ static void chat_task(void *arg)
             .answer = {0},
         };
         const aiqa_provider_caps_t *chat_caps =
-            aiqa_provider_caps_for(s_config_snapshot.config.active_provider);
-        const bool use_stream = s_config_snapshot.config.stream &&
+            aiqa_provider_caps_for(config_snapshot.config.active_provider);
+        const bool use_stream = config_snapshot.config.stream &&
                                 chat_caps != NULL &&
                                 chat_caps->supports_chat_stream;
         const char *response_language = aiqa_language_chat_code(s_dialogue_language);
         esp_err_t chat_ret = use_stream
                                  ? aiqa_chat_send_streaming_with_context(
-                                       &s_config_snapshot.config,
-                                       &s_config_snapshot.secrets,
+                                       &config_snapshot.config,
+                                       &config_snapshot.secrets,
                                        command.prompt,
                                        response_language,
                                        conversation_context[0] != '\0' ? conversation_context : NULL,
@@ -1536,8 +1689,8 @@ static void chat_task(void *arg)
                                        &stream_context,
                                        &result)
                                  : aiqa_chat_send_once_with_context(
-                                       &s_config_snapshot.config,
-                                       &s_config_snapshot.secrets,
+                                       &config_snapshot.config,
+                                       &config_snapshot.secrets,
                                        command.prompt,
                                        response_language,
                                        conversation_context[0] != '\0' ? conversation_context : NULL,
@@ -1551,6 +1704,7 @@ static void chat_task(void *arg)
             (void)memset(conversation_memory, 0, sizeof(conversation_memory));
             (void)memset(profile_context, 0, sizeof(profile_context));
             (void)memset(conversation_context, 0, sizeof(conversation_context));
+            aiqa_config_snapshot_secure_clear(&config_snapshot);
             continue;
         }
         if (result.status == AIQA_CHAT_OK) {
@@ -1569,19 +1723,24 @@ static void chat_task(void *arg)
             ESP_LOGE("aiqa_chat", "Failed to post chat result: %s", esp_err_to_name(post_ret));
         }
         if (result.status == AIQA_CHAT_OK) {
-            speak_pet_answer(result.text, command.generation);
+            speak_pet_answer(
+                result.text,
+                command.generation,
+                &config_snapshot.config,
+                &config_snapshot.secrets);
         }
         (void)memset(prompt_snapshot, 0, sizeof(prompt_snapshot));
         (void)memset(conversation_memory, 0, sizeof(conversation_memory));
         (void)memset(profile_context, 0, sizeof(profile_context));
         (void)memset(conversation_context, 0, sizeof(conversation_context));
         (void)memset(result.text, 0, sizeof(result.text));
+        aiqa_config_snapshot_secure_clear(&config_snapshot);
     }
 }
 
 esp_err_t aiqa_runtime_start(void)
 {
-    s_interaction_generation = 1;
+    atomic_store_explicit(&s_interaction_generation, 1, memory_order_release);
     s_dialogue_language = aiqa_language_default();
     s_pending_local_pet_reply = false;
     aiqa_conversation_memory_init(&s_conversation_memory);
@@ -1607,13 +1766,14 @@ esp_err_t aiqa_runtime_start(void)
              (unsigned)audio_config.max_record_seconds,
              (unsigned)audio_config.max_pcm_bytes);
 
+    s_config_mutex = xSemaphoreCreateMutex();
     s_app_queue = xQueueCreate(AIQA_APP_QUEUE_DEPTH, sizeof(aiqa_event_t));
     s_ui_queue = xQueueCreate(AIQA_UI_QUEUE_DEPTH, sizeof(aiqa_ui_message_t));
     s_net_queue = xQueueCreate(AIQA_NET_QUEUE_DEPTH, sizeof(aiqa_net_command_t));
     s_chat_queue = xQueueCreate(AIQA_CHAT_QUEUE_DEPTH, sizeof(aiqa_chat_command_t));
     s_audio_queue = xQueueCreate(AIQA_AUDIO_QUEUE_DEPTH, sizeof(aiqa_audio_command_t));
     s_asr_queue = xQueueCreate(AIQA_ASR_QUEUE_DEPTH, sizeof(aiqa_asr_command_t));
-    if (s_app_queue == NULL || s_ui_queue == NULL || s_net_queue == NULL ||
+    if (s_config_mutex == NULL || s_app_queue == NULL || s_ui_queue == NULL || s_net_queue == NULL ||
         s_chat_queue == NULL || s_audio_queue == NULL || s_asr_queue == NULL) {
         return ESP_ERR_NO_MEM;
     }

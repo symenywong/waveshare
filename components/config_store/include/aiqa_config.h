@@ -89,6 +89,7 @@ aiqa_config_t aiqa_config_default(void);
 aiqa_config_status_t aiqa_config_validate(const aiqa_config_t *config);
 const char *aiqa_config_status_name(aiqa_config_status_t status);
 aiqa_secret_config_t aiqa_secret_config_empty(void);
+aiqa_secret_status_t aiqa_wifi_secret_config_validate(const aiqa_secret_config_t *secrets);
 aiqa_secret_status_t aiqa_secret_config_validate(const aiqa_secret_config_t *secrets);
 const char *aiqa_secret_status_name(aiqa_secret_status_t status);
 aiqa_wifi_update_status_t aiqa_config_prepare_wifi_update(

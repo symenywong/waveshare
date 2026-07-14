@@ -1,4 +1,5 @@
 #include "aiqa_config_nvs.h"
+#include "aiqa_config_nvs_internal.h"
 
 #include "nvs.h"
 
@@ -9,6 +10,19 @@
 #define AIQA_NVS_KEY_ASSISTANT_NAME "assistant_name"
 #define AIQA_NVS_KEY_ASSISTANT_GENDER "assistant_gender"
 #define AIQA_NVS_DEFAULT_VOLUME_PERCENT 10
+
+void aiqa_config_snapshot_secure_clear(aiqa_config_snapshot_t *snapshot)
+{
+    if (snapshot == NULL) {
+        return;
+    }
+    volatile unsigned char *bytes = (volatile unsigned char *)snapshot;
+    size_t remaining = sizeof(*snapshot);
+    while (remaining > 0) {
+        *bytes++ = 0;
+        --remaining;
+    }
+}
 
 static esp_err_t read_optional_string(nvs_handle_t handle, const char *key, char *value, size_t value_size)
 {
@@ -59,7 +73,7 @@ static esp_err_t read_optional_i32(nvs_handle_t handle, const char *key, int *va
     return ret;
 }
 
-static esp_err_t read_optional_version(nvs_handle_t handle, int *value)
+static esp_err_t read_optional_version(nvs_handle_t handle, int *value, bool *found)
 {
     uint32_t stored = 0;
     esp_err_t ret = nvs_get_u32(handle, "version", &stored);
@@ -68,11 +82,12 @@ static esp_err_t read_optional_version(nvs_handle_t handle, int *value)
     }
     if (ret == ESP_OK) {
         *value = (int)stored;
+        *found = true;
     }
     return ret;
 }
 
-esp_err_t aiqa_config_load_from_nvs(aiqa_config_snapshot_t *snapshot)
+esp_err_t aiqa_config_load_legacy_from_nvs(aiqa_config_snapshot_t *snapshot)
 {
     if (snapshot == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -85,6 +100,8 @@ esp_err_t aiqa_config_load_from_nvs(aiqa_config_snapshot_t *snapshot)
     snapshot->user_prefs.assistant_profile = aiqa_assistant_profile_default();
     snapshot->config_status = AIQA_CONFIG_OK;
     snapshot->secret_status = AIQA_SECRET_ERR_WIFI_SSID;
+    snapshot->revision = 1;
+    snapshot->active_slot = AIQA_CONFIG_SLOT_LEGACY;
 
     nvs_handle_t handle = 0;
     esp_err_t ret = nvs_open(AIQA_NVS_NAMESPACE, NVS_READONLY, &handle);
@@ -96,8 +113,9 @@ esp_err_t aiqa_config_load_from_nvs(aiqa_config_snapshot_t *snapshot)
         return ret;
     }
 
-    snapshot->namespace_found = true;
-    ret = read_optional_version(handle, &snapshot->config.config_version);
+    snapshot->namespace_found = false;
+    ret = read_optional_version(
+        handle, &snapshot->config.config_version, &snapshot->namespace_found);
     if (ret == ESP_OK) {
         ret = read_optional_string(handle, "provider", snapshot->config.active_provider,
                                    sizeof(snapshot->config.active_provider));
@@ -198,7 +216,7 @@ esp_err_t aiqa_config_load_from_nvs(aiqa_config_snapshot_t *snapshot)
     return ESP_OK;
 }
 
-esp_err_t aiqa_config_erase_nvs_namespace(void)
+esp_err_t aiqa_config_erase_legacy_nvs_namespace(void)
 {
     nvs_handle_t handle = 0;
     esp_err_t ret = nvs_open(AIQA_NVS_NAMESPACE, NVS_READWRITE, &handle);
@@ -215,6 +233,51 @@ esp_err_t aiqa_config_erase_nvs_namespace(void)
     }
     nvs_close(handle);
     return ret;
+}
+
+esp_err_t aiqa_config_load_legacy_prefs_from_nvs(aiqa_user_prefs_t *prefs)
+{
+    if (prefs == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    prefs->volume_percent = AIQA_NVS_DEFAULT_VOLUME_PERCENT;
+    prefs->assistant_profile = aiqa_assistant_profile_default();
+
+    nvs_handle_t handle = 0;
+    esp_err_t ret = nvs_open(AIQA_NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (ret == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_OK;
+    }
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    ret = read_optional_raw_u8(handle, AIQA_NVS_KEY_VOLUME, &prefs->volume_percent);
+    if (ret == ESP_OK) {
+        ret = read_optional_string(
+            handle,
+            AIQA_NVS_KEY_ASSISTANT_NAME,
+            prefs->assistant_profile.name,
+            sizeof(prefs->assistant_profile.name));
+    }
+    if (ret == ESP_OK) {
+        char gender_name[16] = {0};
+        ret = read_optional_string(
+            handle, AIQA_NVS_KEY_ASSISTANT_GENDER, gender_name, sizeof(gender_name));
+        if (ret == ESP_OK && gender_name[0] != '\0') {
+            prefs->assistant_profile.gender = aiqa_assistant_gender_from_name(gender_name);
+        }
+    }
+    nvs_close(handle);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    if (prefs->volume_percent > 100) {
+        prefs->volume_percent = AIQA_NVS_DEFAULT_VOLUME_PERCENT;
+    }
+    if (!aiqa_assistant_profile_is_valid(&prefs->assistant_profile)) {
+        prefs->assistant_profile = aiqa_assistant_profile_default();
+    }
+    return ESP_OK;
 }
 
 esp_err_t aiqa_config_save_volume_percent(uint8_t volume_percent)

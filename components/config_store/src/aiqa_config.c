@@ -183,7 +183,7 @@ aiqa_secret_config_t aiqa_secret_config_empty(void)
     return secrets;
 }
 
-aiqa_secret_status_t aiqa_secret_config_validate(const aiqa_secret_config_t *secrets)
+aiqa_secret_status_t aiqa_wifi_secret_config_validate(const aiqa_secret_config_t *secrets)
 {
     if (secrets == NULL || secrets->wifi_ssid[0] == '\0') {
         return AIQA_SECRET_ERR_WIFI_SSID;
@@ -199,6 +199,16 @@ aiqa_secret_status_t aiqa_secret_config_validate(const aiqa_secret_config_t *sec
         (password_len > 0 && password_len < 8) ||
         password_len > 63) {
         return AIQA_SECRET_ERR_WIFI_PASSWORD;
+    }
+
+    return AIQA_SECRET_OK;
+}
+
+aiqa_secret_status_t aiqa_secret_config_validate(const aiqa_secret_config_t *secrets)
+{
+    aiqa_secret_status_t wifi_status = aiqa_wifi_secret_config_validate(secrets);
+    if (wifi_status != AIQA_SECRET_OK) {
+        return wifi_status;
     }
 
     size_t chat_key_len = bounded_strlen(secrets->chat_api_key, sizeof(secrets->chat_api_key));
