@@ -1,12 +1,15 @@
 import { useState } from 'react'
 
 import { WifiSettings } from './components/WifiSettings'
+import { DeviceOverview } from './components/DeviceOverview'
 import { SimulatedDeviceTransport } from './device/deviceTransport'
+import type { DeviceStatus } from './device/deviceStatus'
 
 const transport = new SimulatedDeviceTransport()
 
 export function App() {
-  const [activeSection, setActiveSection] = useState('网络')
+  const [activeSection, setActiveSection] = useState('概览')
+  const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null)
 
   return (
     <main className="app-shell">
@@ -34,14 +37,14 @@ export function App() {
                 <span className="eye left" /><span className="eye right" />
                 <span className="mouth" />
               </div>
-              <p>READY</p>
-              <small>HOLD BOOT</small>
+              <p>{deviceStatus?.ui.status ?? 'SYNC'}</p>
+              <small>{deviceStatus?.ui.hint ?? 'WAIT'}</small>
             </div>
           </div>
           <div className="runtime-strip">
-            <div><span>STATE</span><strong>IDLE</strong></div>
-            <div><span>WI-FI</span><strong>–48 dBm</strong></div>
-            <div><span>HEAP</span><strong>184 KB</strong></div>
+            <div><span>STATE</span><strong>{deviceStatus?.state ?? '—'}</strong></div>
+            <div><span>WI-FI</span><strong>{deviceStatus?.wifi.rssiDbm ?? '—'} dBm</strong></div>
+            <div><span>HEAP</span><strong>{deviceStatus ? Math.round(deviceStatus.freeHeapBytes / 1024) : '—'} KB</strong></div>
           </div>
         </aside>
 
@@ -59,7 +62,9 @@ export function App() {
             ))}
           </nav>
           <div className="panel-body">
-            {activeSection === '网络' ? (
+            {activeSection === '概览' ? (
+              <DeviceOverview onStatus={setDeviceStatus} transport={transport} />
+            ) : activeSection === '网络' ? (
               <WifiSettings transport={transport} />
             ) : (
               <div className="coming-soon">

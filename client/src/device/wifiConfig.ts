@@ -10,7 +10,7 @@ const ssidSchema = z
   .refine((ssid) => textEncoder.encode(ssid).byteLength <= 32, 'Wi-Fi 名称不能超过 32 字节')
 
 const baseSchema = {
-  baseRevision: z.number().int().min(0).max(UINT32_MAX),
+  baseRevision: z.number().int().min(1).max(UINT32_MAX),
   ssid: ssidSchema,
 }
 

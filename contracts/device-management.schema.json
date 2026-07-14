@@ -4,9 +4,86 @@
   "title": "AIQA device management Wi-Fi contract",
   "oneOf": [
     { "$ref": "#/$defs/wifiUpdate" },
-    { "$ref": "#/$defs/wifiPublicConfig" }
+    { "$ref": "#/$defs/wifiPublicConfig" },
+    { "$ref": "#/$defs/wifiUpdateAccepted" },
+    { "$ref": "#/$defs/deviceStatus" }
   ],
   "$defs": {
+    "managementOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "state", "result"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "state": { "enum": ["NONE", "PENDING", "SUCCEEDED", "FAILED"] },
+        "result": { "enum": ["OK", "INVALID_REQUEST", "FORBIDDEN", "NOT_READY", "REVISION_CONFLICT", "REVISION_EXHAUSTED", "BUSY", "WIFI_UNREACHABLE_ROLLED_BACK", "PERSISTENCE_FAILED_ROLLED_BACK", "RECOVERY_REQUIRED", "CANCELLED", "INTERNAL_ERROR"] }
+      }
+    },
+    "wifiUpdateAccepted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "state"],
+      "properties": {
+        "operationId": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "state": { "const": "PENDING" }
+      }
+    },
+    "deviceStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sequence", "state", "error", "uptimeMs", "freeHeapBytes", "wifi", "power", "ui", "config", "latestOperation"],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "state": { "enum": ["BOOT", "CONFIG_CHECK", "NETWORK_CONNECTING", "IDLE", "RECORDING", "TRANSCRIBING", "ASR_JOB_PENDING", "THINKING", "IDLE_WITH_RESULT", "ERROR"] },
+        "error": { "enum": ["NONE", "CONFIG_MISSING", "CONFIG_CORRUPT", "NETWORK_FAILED", "AUTH_FAILED", "TLS_FAILED", "CERT_TIME_INVALID", "RATE_LIMITED", "PROVIDER_UNSUPPORTED", "AUDIO_TOO_LONG", "ASR_FAILED", "CHAT_FAILED", "TIMEOUT", "CANCELLED"] },
+        "uptimeMs": { "type": "integer", "minimum": 0 },
+        "freeHeapBytes": { "type": "integer", "minimum": 0 },
+        "wifi": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["connected", "rssiDbm"],
+          "properties": {
+            "connected": { "type": "boolean" },
+            "rssiDbm": { "type": ["integer", "null"], "minimum": -127, "maximum": 0 }
+          }
+        },
+        "power": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["batteryPresent", "percent", "chargingState"],
+          "properties": {
+            "batteryPresent": { "type": "boolean" },
+            "percent": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 },
+            "chargingState": { "enum": ["UNKNOWN", "DISCHARGING", "ACTIVE", "DONE"] }
+          }
+        },
+        "ui": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "detail", "hint", "expression"],
+          "properties": {
+            "status": { "type": "string", "minLength": 1, "maxLength": 16 },
+            "detail": { "type": ["string", "null"], "minLength": 1, "maxLength": 32 },
+            "hint": { "type": ["string", "null"], "minLength": 1, "maxLength": 32 },
+            "expression": { "enum": ["SLEEPY", "IDLE", "HAPPY", "LISTENING", "THINKING", "SPEAKING", "SAD", "SHY", "FRUSTRATED", "BOUNCING", "LAUGHING", "CRYING", "CURIOUS", "WORRIED"] }
+          }
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["available", "revision", "chatProvider", "chatModel", "hasChatApiKey", "hasAsrApiKey"],
+          "properties": {
+            "available": { "type": "boolean" },
+            "revision": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+            "chatProvider": { "type": ["string", "null"], "minLength": 1, "maxLength": 31 },
+            "chatModel": { "type": ["string", "null"], "minLength": 1, "maxLength": 63 },
+            "hasChatApiKey": { "type": "boolean" },
+            "hasAsrApiKey": { "type": "boolean" }
+          }
+        },
+        "latestOperation": { "$ref": "#/$defs/managementOperation" }
+      }
+    },
     "wifiPublicConfig": {
       "type": "object",
       "additionalProperties": false,
@@ -24,7 +101,7 @@
           "additionalProperties": false,
           "required": ["baseRevision", "ssid", "passwordAction"],
           "properties": {
-            "baseRevision": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+            "baseRevision": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
             "ssid": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[^\\u0000]+$", "x-maxUtf8Bytes": 32 },
             "passwordAction": { "const": "keep" }
           }
@@ -34,7 +111,7 @@
           "additionalProperties": false,
           "required": ["baseRevision", "ssid", "passwordAction", "password"],
           "properties": {
-            "baseRevision": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+            "baseRevision": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
             "ssid": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[^\\u0000]+$", "x-maxUtf8Bytes": 32 },
             "passwordAction": { "const": "replace" },
             "password": { "type": "string", "minLength": 8, "maxLength": 63, "pattern": "^[^\\u0000]+$", "x-maxUtf8Bytes": 63, "writeOnly": true }
@@ -45,7 +122,7 @@
           "additionalProperties": false,
           "required": ["baseRevision", "ssid", "passwordAction"],
           "properties": {
-            "baseRevision": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+            "baseRevision": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
             "ssid": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[^\\u0000]+$", "x-maxUtf8Bytes": 32 },
             "passwordAction": { "const": "clear" }
           }

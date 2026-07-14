@@ -8,7 +8,8 @@ Other tasks send events or receive commands through queues.
 - `app_state_task`: state transitions, cancellation, error handling.
 - `ui_task`: display owner for the circular pet interface; it must not perform network or I2S.
 - `audio_task`: ES7210/I2S capture, PSRAM PCM buffer, max-duration guard, ASR handoff.
-- `net_task`: future HTTPS owner with TLS validation, staged timeouts, streaming.
+- `net_task`: Wi-Fi/config-transaction owner; serializes connect, reconfiguration,
+  factory reset, SNTP, and network recovery.
 - `provider` adapters: request/response protocol only; no UI or socket ownership.
 
 ## Phase Order
@@ -122,6 +123,43 @@ Implemented:
   - Wi-Fi + SNTP success -> `NETWORK_READY`
   - Wi-Fi/SNTP failure -> `NETWORK_FAILED`
 - Network policy contract tests cover retry delay and minimum valid TLS time.
+
+## Current Device Management Scope
+
+Implemented:
+
+- React/Vite management console with a simulated transport, live overview, device
+  screen preview, redacted model/key state, and Wi-Fi account/password editing.
+- Strict JSON/Zod status contract for runtime, heap, Wi-Fi, battery, current UI,
+  redacted model configuration, and latest asynchronous operation.
+- Transport-independent firmware `management_service` with explicit public DTO
+  allowlists; passwords, API keys, and base URLs are never returned.
+- Session authorization is delegated to a trusted server-side callback. Runtime
+  authorization currently fails closed until the pairing/authenticated transport
+  phase supplies a verified session registry; wire payloads cannot set permission
+  booleans.
+- Wi-Fi changes return an operation ID and run asynchronously through the single
+  `net_task` owner. The client transport abstraction must poll `latestOperation`
+  before returning the refreshed public Wi-Fi view.
+- Wi-Fi credentials are projected into the minimum credential-only type and are
+  stored in owned heap jobs; FreeRTOS queues contain pointers rather than secret
+  bytes. Every completion, cancellation, and queue-drain path clears memory.
+- Atomic A/B NVS update flow: revision check, stage, verify, trial connection,
+  activation, rollback, and recovery-required quarantine.
+- Factory reset is queued behind any active network/config transaction, then
+  disconnects Wi-Fi, clears the runtime snapshot, erases all configuration
+  namespaces, and publishes the final result.
+- Host tests include a real concurrent slow-reader/completion case. Management
+  service line coverage is above 90%; client line coverage is above 95%.
+
+Next:
+
+- Implement the authenticated physical transport (USB serial first, then optional
+  BLE/Wi-Fi), its wire codec, pairing/session registry, rate limiting, and operation
+  polling adapter.
+- Enable production NVS/flash encryption.
+- Add provider/model/key, assistant image, prompt, and simulation/debug write DTOs
+  on top of the same transaction and authorization boundary.
 
 ## Current Chat Scope
 

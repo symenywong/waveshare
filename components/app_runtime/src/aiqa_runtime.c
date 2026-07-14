@@ -11,6 +11,7 @@
 #include "aiqa_chat_client.h"
 #include "aiqa_language.h"
 #include "aiqa_local_command.h"
+#include "aiqa_management_service.h"
 #include "aiqa_net_connect.h"
 #include "aiqa_ptt_button.h"
 #include "aiqa_provider.h"
@@ -23,6 +24,7 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -66,11 +68,21 @@ typedef struct {
 typedef enum {
     AIQA_NET_COMMAND_CONNECT = 0,
     AIQA_NET_COMMAND_DISCONNECT,
+    AIQA_NET_COMMAND_APPLY_WIFI,
+    AIQA_NET_COMMAND_FACTORY_RESET,
 } aiqa_net_command_type_t;
+typedef struct {
+    aiqa_wifi_credentials_t credentials;
+} aiqa_wifi_connect_job_t;
+typedef struct {
+    uint32_t operation_id;
+    aiqa_management_owned_wifi_update_t update;
+} aiqa_management_wifi_job_t;
 typedef struct {
     aiqa_net_command_type_t type;
     uint32_t generation;
-    aiqa_secret_config_t secrets;
+    aiqa_wifi_connect_job_t *connect_job;
+    aiqa_management_wifi_job_t *wifi_update_job;
 } aiqa_net_command_t;
 typedef enum {
     AIQA_CHAT_COMMAND_USER_PROMPT = 0,
@@ -129,6 +141,9 @@ static QueueHandle_t s_app_queue, s_ui_queue, s_net_queue, s_chat_queue, s_audio
 static SemaphoreHandle_t s_config_mutex;
 static aiqa_config_snapshot_t s_config_snapshot;
 static bool s_config_snapshot_ready;
+static aiqa_management_service_t s_management_service;
+static aiqa_management_device_status_t s_management_status;
+static bool s_management_service_ready;
 static bool s_startup_audio_test_done;
 static bool s_pending_local_pet_reply;
 static aiqa_dialogue_language_t s_dialogue_language = AIQA_DIALOGUE_LANGUAGE_CHINESE;
@@ -164,6 +179,16 @@ static void store_config_snapshot(const aiqa_config_snapshot_t *snapshot)
     }
     s_config_snapshot = *snapshot;
     s_config_snapshot_ready = true;
+    s_management_status.config.available = true;
+    s_management_status.config.revision = snapshot->revision;
+    (void)snprintf(s_management_status.config.chat_provider,
+                   sizeof(s_management_status.config.chat_provider),
+                   "%s", snapshot->config.active_provider);
+    (void)snprintf(s_management_status.config.chat_model,
+                   sizeof(s_management_status.config.chat_model),
+                   "%s", snapshot->config.model);
+    s_management_status.config.has_chat_api_key = snapshot->secrets.chat_api_key[0] != '\0';
+    s_management_status.config.has_asr_api_key = snapshot->secrets.asr_api_key[0] != '\0';
     (void)xSemaphoreGive(s_config_mutex);
 }
 
@@ -174,6 +199,63 @@ static void clear_config_snapshot(void)
     }
     s_config_snapshot_ready = false;
     aiqa_config_snapshot_secure_clear(&s_config_snapshot);
+    (void)memset(&s_management_status.config, 0, sizeof(s_management_status.config));
+    (void)memset(&s_management_status.wifi, 0, sizeof(s_management_status.wifi));
+    (void)xSemaphoreGive(s_config_mutex);
+}
+
+static bool store_config_record(const aiqa_config_record_t *record)
+{
+    if (record == NULL || s_config_mutex == NULL ||
+        xSemaphoreTake(s_config_mutex, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+    const bool ready = s_config_snapshot_ready;
+    if (ready) {
+        s_config_snapshot.config = record->config;
+        s_config_snapshot.secrets = record->secrets;
+        s_config_snapshot.config_status = AIQA_CONFIG_OK;
+        s_config_snapshot.secret_status = AIQA_SECRET_OK;
+        s_config_snapshot.revision = record->revision;
+        s_config_snapshot.active_slot = record->active_slot;
+        s_management_status.config.available = true;
+        s_management_status.config.revision = record->revision;
+        (void)snprintf(s_management_status.config.chat_provider,
+                       sizeof(s_management_status.config.chat_provider),
+                       "%s", record->config.active_provider);
+        (void)snprintf(s_management_status.config.chat_model,
+                       sizeof(s_management_status.config.chat_model),
+                       "%s", record->config.model);
+        s_management_status.config.has_chat_api_key = record->secrets.chat_api_key[0] != '\0';
+        s_management_status.config.has_asr_api_key = record->secrets.asr_api_key[0] != '\0';
+        s_management_status.wifi.connected = true;
+    }
+    (void)xSemaphoreGive(s_config_mutex);
+    return ready;
+}
+
+static void publish_management_transition(
+    aiqa_transition_t transition,
+    aiqa_event_t event)
+{
+    if (s_config_mutex == NULL ||
+        xSemaphoreTake(s_config_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    s_management_status.state = transition.next_state;
+    s_management_status.error = transition.error;
+    if (transition.changed) {
+        s_management_status.sequence += 1U;
+    }
+    if (event.type == AIQA_EVENT_NETWORK_READY) {
+        s_management_status.wifi.connected = true;
+    } else if (event.type == AIQA_EVENT_NETWORK_FAILED ||
+               event.type == AIQA_EVENT_CONFIG_MISSING ||
+               event.type == AIQA_EVENT_CONFIG_CORRUPT ||
+               event.type == AIQA_EVENT_FACTORY_RESET) {
+        s_management_status.wifi.connected = false;
+        s_management_status.wifi.rssi_available = false;
+    }
     (void)xSemaphoreGive(s_config_mutex);
 }
 
@@ -220,6 +302,41 @@ static void secure_zero_bytes(void *data, size_t length)
         *cursor++ = 0;
         --length;
     }
+}
+
+static aiqa_wifi_connect_job_t *allocate_wifi_connect_job(
+    const aiqa_secret_config_t *secrets)
+{
+    aiqa_wifi_connect_job_t *job = heap_caps_calloc(
+        1, sizeof(*job), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (job == NULL) {
+        return NULL;
+    }
+    if (!aiqa_wifi_credentials_from_secrets(secrets, &job->credentials)) {
+        secure_zero_bytes(job, sizeof(*job));
+        heap_caps_free(job);
+        return NULL;
+    }
+    return job;
+}
+
+static void release_wifi_connect_job(aiqa_wifi_connect_job_t *job)
+{
+    if (job == NULL) {
+        return;
+    }
+    aiqa_wifi_credentials_secure_clear(&job->credentials);
+    heap_caps_free(job);
+}
+
+static void release_management_wifi_job(aiqa_management_wifi_job_t *job)
+{
+    if (job == NULL) {
+        return;
+    }
+    aiqa_management_owned_wifi_update_secure_clear(&job->update);
+    secure_zero_bytes(job, sizeof(*job));
+    heap_caps_free(job);
 }
 
 static uint32_t current_interaction_generation(void)
@@ -386,6 +503,149 @@ static esp_err_t post_net_command(const aiqa_net_command_t *command)
     return ESP_OK;
 }
 
+static const char *management_expression_name(board_wave_175c_pet_expression_t expression)
+{
+    static const char *const NAMES[] = {
+        "SLEEPY", "IDLE", "HAPPY", "LISTENING", "THINKING", "SPEAKING", "SAD",
+        "SHY", "FRUSTRATED", "BOUNCING", "LAUGHING", "CRYING", "CURIOUS", "WORRIED",
+    };
+    const unsigned index = (unsigned)expression;
+    return index < BOARD_WAVE_175C_PET_EXPRESSION_COUNT
+               ? NAMES[index]
+               : "CURIOUS";
+}
+
+static bool management_authorize(
+    void *context,
+    uint32_t session_id,
+    aiqa_management_capability_t capability)
+{
+    (void)context;
+    (void)session_id;
+    (void)capability;
+    /* Fail closed until the authenticated pairing transport owns a session registry. */
+    return false;
+}
+
+static aiqa_management_charging_state_t management_charging_state(
+    board_wave_175c_charging_state_t state)
+{
+    switch (state) {
+    case BOARD_WAVE_175C_CHARGING_DISCHARGING:
+        return AIQA_MANAGEMENT_CHARGING_DISCHARGING;
+    case BOARD_WAVE_175C_CHARGING_ACTIVE:
+        return AIQA_MANAGEMENT_CHARGING_ACTIVE;
+    case BOARD_WAVE_175C_CHARGING_DONE:
+        return AIQA_MANAGEMENT_CHARGING_DONE;
+    case BOARD_WAVE_175C_CHARGING_UNKNOWN:
+    default:
+        return AIQA_MANAGEMENT_CHARGING_UNKNOWN;
+    }
+}
+
+static bool management_copy_status(
+    void *context,
+    aiqa_management_device_status_t *out_status)
+{
+    (void)context;
+    if (out_status == NULL || s_config_mutex == NULL ||
+        xSemaphoreTake(s_config_mutex, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+    aiqa_management_device_status_t status = s_management_status;
+    (void)xSemaphoreGive(s_config_mutex);
+
+    status.uptime_ms = (uint64_t)(esp_timer_get_time() / 1000LL);
+    status.free_heap_bytes = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    const board_wave_175c_display_page_t page =
+        aiqa_runtime_ui_page_for(status.state, status.error);
+    (void)snprintf(status.ui.status, sizeof(status.ui.status), "%s", page.status);
+    if (page.detail != NULL) {
+        (void)snprintf(status.ui.detail, sizeof(status.ui.detail), "%s", page.detail);
+    }
+    if (page.hint != NULL) {
+        (void)snprintf(status.ui.hint, sizeof(status.ui.hint), "%s", page.hint);
+    }
+    (void)snprintf(status.ui.expression,
+                   sizeof(status.ui.expression),
+                   "%s", management_expression_name(page.expression));
+
+    board_wave_175c_power_status_t power = {0};
+    if (board_wave_175c_get_power_status(&power) == ESP_OK) {
+        status.power.battery_present = power.battery_present;
+        status.power.percent_available = power.battery_present;
+        status.power.percent = power.percent;
+        status.power.charging_state = management_charging_state(power.charging_state);
+    }
+    *out_status = status;
+    secure_zero_bytes(&status, sizeof(status));
+    return true;
+}
+
+static bool management_copy_public_config(
+    void *context,
+    aiqa_management_public_config_t *out_config)
+{
+    (void)context;
+    aiqa_config_snapshot_t snapshot = {0};
+    if (out_config == NULL || !copy_config_snapshot(&snapshot)) {
+        return false;
+    }
+    const bool projected = aiqa_management_public_config_from_snapshot(&snapshot, out_config);
+    aiqa_config_snapshot_secure_clear(&snapshot);
+    return projected;
+}
+
+static aiqa_management_result_t management_submit_wifi(
+    void *context,
+    uint32_t operation_id,
+    const aiqa_management_owned_wifi_update_t *update)
+{
+    (void)context;
+    if (operation_id == 0 || update == NULL) {
+        return AIQA_MANAGEMENT_INVALID_REQUEST;
+    }
+    aiqa_config_snapshot_t snapshot = {0};
+    if (!copy_config_snapshot(&snapshot)) {
+        return AIQA_MANAGEMENT_NOT_READY;
+    }
+    const uint32_t active_revision = snapshot.revision;
+    aiqa_config_snapshot_secure_clear(&snapshot);
+    if (active_revision != update->base_revision) {
+        return AIQA_MANAGEMENT_REVISION_CONFLICT;
+    }
+    aiqa_management_wifi_job_t *job = heap_caps_calloc(
+        1, sizeof(*job), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (job == NULL) {
+        return AIQA_MANAGEMENT_INTERNAL_ERROR;
+    }
+    job->operation_id = operation_id;
+    job->update = *update;
+    aiqa_net_command_t command = {
+        .type = AIQA_NET_COMMAND_APPLY_WIFI,
+        .wifi_update_job = job,
+    };
+    if (post_net_command(&command) != ESP_OK) {
+        release_management_wifi_job(job);
+        return AIQA_MANAGEMENT_BUSY;
+    }
+    return AIQA_MANAGEMENT_OK;
+}
+
+static bool complete_management_wifi_operation(
+    uint32_t operation_id,
+    aiqa_management_result_t result)
+{
+    for (uint8_t attempt = 0; attempt < 10U; ++attempt) {
+        if (aiqa_management_service_complete_wifi_update(
+                &s_management_service, operation_id, result)) {
+            return true;
+        }
+        vTaskDelay(1);
+    }
+    return false;
+}
+
 static void clear_pending_net_commands(void)
 {
     if (s_net_queue == NULL) {
@@ -393,6 +653,15 @@ static void clear_pending_net_commands(void)
     }
     aiqa_net_command_t pending = {0};
     while (xQueueReceive(s_net_queue, &pending, 0) == pdTRUE) {
+        if (pending.connect_job != NULL) {
+            release_wifi_connect_job(pending.connect_job);
+        }
+        if (pending.wifi_update_job != NULL) {
+            (void)complete_management_wifi_operation(
+                pending.wifi_update_job->operation_id,
+                AIQA_MANAGEMENT_CANCELLED);
+            release_management_wifi_job(pending.wifi_update_job);
+        }
         secure_zero_bytes(&pending, sizeof(pending));
     }
 }
@@ -733,6 +1002,38 @@ esp_err_t aiqa_runtime_post_event_from_isr(aiqa_event_t event, bool *higher_prio
     return ESP_OK;
 }
 
+aiqa_management_result_t aiqa_runtime_management_get_status(
+    const aiqa_management_security_context_t *access,
+    aiqa_management_device_status_t *out_status)
+{
+    if (!s_management_service_ready) {
+        return AIQA_MANAGEMENT_NOT_READY;
+    }
+    return aiqa_management_service_get_status(&s_management_service, access, out_status);
+}
+
+aiqa_management_result_t aiqa_runtime_management_get_public_config(
+    const aiqa_management_security_context_t *access,
+    aiqa_management_public_config_t *out_config)
+{
+    if (!s_management_service_ready) {
+        return AIQA_MANAGEMENT_NOT_READY;
+    }
+    return aiqa_management_service_get_public_config(&s_management_service, access, out_config);
+}
+
+aiqa_management_result_t aiqa_runtime_management_submit_wifi_update(
+    const aiqa_management_security_context_t *access,
+    const aiqa_management_owned_wifi_update_t *update,
+    uint32_t *out_operation_id)
+{
+    if (!s_management_service_ready) {
+        return AIQA_MANAGEMENT_NOT_READY;
+    }
+    return aiqa_management_service_submit_wifi_update(
+        &s_management_service, access, update, out_operation_id);
+}
+
 static void app_state_task(void *arg)
 {
     (void)arg;
@@ -769,6 +1070,7 @@ static void app_state_task(void *arg)
                      aiqa_state_name(transition.previous_state));
             continue;
         }
+        publish_management_transition(transition, event);
 
         if (transition.changed) {
             ESP_LOGI(TAG, "%s --%s--> %s",
@@ -786,24 +1088,16 @@ static void app_state_task(void *arg)
             (void)begin_new_interaction();
             if (s_net_queue != NULL) {
                 clear_pending_net_commands();
-                aiqa_net_command_t disconnect = {.type = AIQA_NET_COMMAND_DISCONNECT};
-                (void)post_net_command(&disconnect);
-            }
-            clear_config_snapshot();
-            esp_err_t erase_ret = aiqa_config_erase_nvs_namespace();
-            if (erase_ret != ESP_OK) {
-                ESP_LOGE(TAG, "Factory reset failed: %s", esp_err_to_name(erase_ret));
-            } else {
-                ESP_LOGW(TAG, "Factory reset erased legacy, A/B, and metadata NVS namespaces");
-            }
-            aiqa_event_t reset_result = {
-                .type = erase_ret == ESP_OK ? AIQA_EVENT_CONFIG_MISSING : AIQA_EVENT_CONFIG_CORRUPT,
-                .error = erase_ret == ESP_OK ? AIQA_ERROR_CONFIG_MISSING : AIQA_ERROR_CONFIG_CORRUPT,
-                .value = (uint32_t)erase_ret,
-            };
-            post_ret = aiqa_runtime_post_event(reset_result);
-            if (post_ret != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to post factory reset result: %s", esp_err_to_name(post_ret));
+                aiqa_net_command_t reset = {.type = AIQA_NET_COMMAND_FACTORY_RESET};
+                esp_err_t reset_ret = post_net_command(&reset);
+                if (reset_ret != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to queue factory reset: %s", esp_err_to_name(reset_ret));
+                    (void)aiqa_runtime_post_event((aiqa_event_t){
+                        .type = AIQA_EVENT_CONFIG_CORRUPT,
+                        .error = AIQA_ERROR_CONFIG_CORRUPT,
+                        .value = (uint32_t)reset_ret,
+                    });
+                }
             }
             continue;
         }
@@ -827,15 +1121,25 @@ static void app_state_task(void *arg)
                     ESP_LOGE(TAG, "Failed to post config failure event: %s", esp_err_to_name(post_ret));
                 }
             } else {
+                aiqa_wifi_connect_job_t *connect_job =
+                    allocate_wifi_connect_job(&snapshot.secrets);
                 aiqa_net_command_t command = {
                     .type = AIQA_NET_COMMAND_CONNECT,
                     .generation = current_interaction_generation(),
-                    .secrets = snapshot.secrets,
+                    .connect_job = connect_job,
                 };
+                if (connect_job == NULL) {
+                    aiqa_config_snapshot_secure_clear(&snapshot);
+                    (void)aiqa_runtime_post_event((aiqa_event_t){
+                        .type = AIQA_EVENT_CONFIG_CORRUPT,
+                        .error = AIQA_ERROR_CONFIG_CORRUPT,
+                    });
+                    continue;
+                }
                 aiqa_config_snapshot_secure_clear(&snapshot);
                 esp_err_t net_ret = post_net_command(&command);
-                secure_zero_bytes(&command.secrets, sizeof(command.secrets));
                 if (net_ret != ESP_OK) {
+                    release_wifi_connect_job(connect_job);
                     ESP_LOGE(TAG, "Failed to post network command: %s", esp_err_to_name(net_ret));
                     aiqa_event_t failed = {
                         .type = AIQA_EVENT_NETWORK_FAILED,
@@ -1070,6 +1374,98 @@ static void button_task(void *arg)
     }
 }
 
+static aiqa_management_result_t map_transaction_result(
+    aiqa_config_transaction_status_t status)
+{
+    switch (status) {
+    case AIQA_CONFIG_TRANSACTION_OK:
+        return AIQA_MANAGEMENT_OK;
+    case AIQA_CONFIG_TRANSACTION_ERR_REVISION_CONFLICT:
+        return AIQA_MANAGEMENT_REVISION_CONFLICT;
+    case AIQA_CONFIG_TRANSACTION_ERR_REVISION_EXHAUSTED:
+        return AIQA_MANAGEMENT_REVISION_EXHAUSTED;
+    case AIQA_CONFIG_TRANSACTION_ERR_BUSY:
+        return AIQA_MANAGEMENT_BUSY;
+    case AIQA_CONFIG_TRANSACTION_ERR_SSID:
+    case AIQA_CONFIG_TRANSACTION_ERR_PASSWORD:
+    case AIQA_CONFIG_TRANSACTION_ERR_PASSWORD_ACTION:
+    case AIQA_CONFIG_TRANSACTION_ERR_INVALID_ARGUMENT:
+        return AIQA_MANAGEMENT_INVALID_REQUEST;
+    case AIQA_CONFIG_TRANSACTION_ERR_TRIAL_FAILED_ROLLED_BACK:
+        return AIQA_MANAGEMENT_WIFI_UNREACHABLE_ROLLED_BACK;
+    case AIQA_CONFIG_TRANSACTION_ERR_STAGE_FAILED:
+    case AIQA_CONFIG_TRANSACTION_ERR_VERIFY_FAILED:
+    case AIQA_CONFIG_TRANSACTION_ERR_ACTIVATE_FAILED_ROLLED_BACK:
+        return AIQA_MANAGEMENT_PERSISTENCE_FAILED_ROLLED_BACK;
+    case AIQA_CONFIG_TRANSACTION_ERR_NETWORK_RECOVERY_FAILED:
+    case AIQA_CONFIG_TRANSACTION_ERR_ACTIVATION_INDETERMINATE:
+    case AIQA_CONFIG_TRANSACTION_ERR_CANDIDATE_CLEANUP_FAILED:
+    case AIQA_CONFIG_TRANSACTION_ERR_RECOVERY_REQUIRED:
+        return AIQA_MANAGEMENT_RECOVERY_REQUIRED;
+    default:
+        return AIQA_MANAGEMENT_INTERNAL_ERROR;
+    }
+}
+
+static aiqa_management_result_t apply_management_wifi_job(
+    const aiqa_management_wifi_job_t *job)
+{
+    if (job == NULL) {
+        return AIQA_MANAGEMENT_INVALID_REQUEST;
+    }
+    aiqa_config_record_t active = {0};
+    bool found = false;
+    esp_err_t load_ret = aiqa_config_nvs_load_active_record(&active, &found);
+    if (load_ret != ESP_OK || !found) {
+        aiqa_config_record_secure_clear(&active);
+        return load_ret == ESP_OK ? AIQA_MANAGEMENT_NOT_READY
+                                  : AIQA_MANAGEMENT_INTERNAL_ERROR;
+    }
+
+    aiqa_net_transaction_adapter_t network_adapter = {0};
+    const aiqa_net_policy_t policy = aiqa_net_default_policy();
+    aiqa_net_transaction_adapter_init(&network_adapter, &policy);
+    aiqa_config_transaction_ports_t ports = {
+        .storage = aiqa_config_nvs_storage_ports(),
+        .network = aiqa_net_transaction_ports(&network_adapter),
+    };
+    aiqa_config_transaction_t transaction = {0};
+    if (!aiqa_config_transaction_init(&transaction, &active, &ports)) {
+        aiqa_config_record_secure_clear(&active);
+        aiqa_config_transaction_secure_clear(&transaction);
+        return AIQA_MANAGEMENT_INTERNAL_ERROR;
+    }
+
+    const aiqa_wifi_update_t request = {
+        .base_revision = job->update.base_revision,
+        .password_action = job->update.password_action,
+        .ssid = job->update.ssid,
+        .password = job->update.password,
+    };
+    const aiqa_config_transaction_status_t transaction_status =
+        aiqa_config_transaction_apply_wifi(&transaction, &request, NULL);
+    aiqa_management_result_t result = map_transaction_result(transaction_status);
+    if (result == AIQA_MANAGEMENT_OK) {
+        aiqa_config_record_t updated = {0};
+        if (aiqa_config_transaction_copy_active(&transaction, &updated) !=
+                AIQA_CONFIG_TRANSACTION_READ_OK ||
+            !store_config_record(&updated)) {
+            result = AIQA_MANAGEMENT_INTERNAL_ERROR;
+        }
+        aiqa_config_record_secure_clear(&updated);
+    } else if (result == AIQA_MANAGEMENT_RECOVERY_REQUIRED) {
+        clear_config_snapshot();
+        (void)aiqa_runtime_post_event((aiqa_event_t){
+            .type = AIQA_EVENT_CONFIG_CORRUPT,
+            .error = AIQA_ERROR_CONFIG_CORRUPT,
+        });
+    }
+
+    aiqa_config_transaction_secure_clear(&transaction);
+    aiqa_config_record_secure_clear(&active);
+    return result;
+}
+
 static void net_task(void *arg)
 {
     (void)arg;
@@ -1087,13 +1483,57 @@ static void net_task(void *arg)
             }
             continue;
         }
+        if (command.type == AIQA_NET_COMMAND_FACTORY_RESET) {
+            const esp_err_t forget_ret = aiqa_net_forget_wifi();
+            if (forget_ret != ESP_OK) {
+                ESP_LOGW("aiqa_net", "Wi-Fi RAM credential cleanup failed: %s",
+                         esp_err_to_name(forget_ret));
+            }
+            clear_config_snapshot();
+            const esp_err_t erase_ret = aiqa_config_erase_nvs_namespace();
+            const esp_err_t reset_ret = erase_ret != ESP_OK ? erase_ret : forget_ret;
+            if (reset_ret == ESP_OK) {
+                ESP_LOGW("aiqa_net", "Factory reset erased all configuration namespaces");
+            } else {
+                ESP_LOGE("aiqa_net", "Factory reset failed: %s", esp_err_to_name(reset_ret));
+            }
+            const esp_err_t post_ret = aiqa_runtime_post_event((aiqa_event_t){
+                .type = reset_ret == ESP_OK ? AIQA_EVENT_CONFIG_MISSING
+                                            : AIQA_EVENT_CONFIG_CORRUPT,
+                .error = reset_ret == ESP_OK ? AIQA_ERROR_CONFIG_MISSING
+                                             : AIQA_ERROR_CONFIG_CORRUPT,
+                .value = (uint32_t)reset_ret,
+            });
+            if (post_ret != ESP_OK) {
+                ESP_LOGE("aiqa_net", "Failed to publish factory reset result: %s",
+                         esp_err_to_name(post_ret));
+            }
+            continue;
+        }
+        if (command.type == AIQA_NET_COMMAND_APPLY_WIFI) {
+            aiqa_management_result_t result =
+                apply_management_wifi_job(command.wifi_update_job);
+            const uint32_t operation_id = command.wifi_update_job != NULL
+                                              ? command.wifi_update_job->operation_id
+                                              : 0;
+            if (!complete_management_wifi_operation(operation_id, result)) {
+                ESP_LOGE("aiqa_net", "Failed to complete Wi-Fi management operation");
+            }
+            release_management_wifi_job(command.wifi_update_job);
+            continue;
+        }
         if (command.type != AIQA_NET_COMMAND_CONNECT) {
+            continue;
+        }
+        if (command.connect_job == NULL) {
+            ESP_LOGE("aiqa_net", "Wi-Fi connect command missing owned job");
             continue;
         }
 
         aiqa_net_policy_t policy = aiqa_net_default_policy();
-        esp_err_t ret = aiqa_net_connect_wifi_and_sync_time(&command.secrets, &policy);
-        secure_zero_bytes(&command.secrets, sizeof(command.secrets));
+        esp_err_t ret = aiqa_net_connect_wifi_and_sync_time(
+            &command.connect_job->credentials, &policy);
+        release_wifi_connect_job(command.connect_job);
         if (!interaction_generation_is_current(command.generation)) {
             ESP_LOGI("aiqa_net", "Dropping stale network result generation=%u",
                      (unsigned)command.generation);
@@ -1777,6 +2217,22 @@ esp_err_t aiqa_runtime_start(void)
         s_chat_queue == NULL || s_audio_queue == NULL || s_asr_queue == NULL) {
         return ESP_ERR_NO_MEM;
     }
+
+    s_management_status = (aiqa_management_device_status_t){
+        .state = AIQA_STATE_BOOT,
+        .error = AIQA_ERROR_NONE,
+    };
+    const aiqa_management_ports_t management_ports = {
+        .context = NULL,
+        .authorize = management_authorize,
+        .copy_status = management_copy_status,
+        .copy_public_config = management_copy_public_config,
+        .submit_wifi = management_submit_wifi,
+    };
+    if (!aiqa_management_service_init(&s_management_service, &management_ports)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_management_service_ready = true;
 
     if (xTaskCreate(app_state_task, "aiqa_state", AIQA_TASK_STACK_APP, NULL, 8, NULL) != pdPASS ||
         xTaskCreate(ui_task, "aiqa_ui", AIQA_TASK_STACK_UI, NULL, 4, NULL) != pdPASS ||

@@ -64,12 +64,12 @@ static bool fake_verify(void *opaque, aiqa_config_slot_t slot, const aiqa_config
     return context->verify_ok;
 }
 
-static bool fake_trial(void *opaque, const aiqa_secret_config_t *secrets)
+static bool fake_trial(void *opaque, const aiqa_wifi_credentials_t *credentials)
 {
     fake_context_t *context = opaque;
     trace(context, 'T');
-    assert(secrets != NULL);
-    assert(strcmp(secrets->wifi_ssid, "new-wifi") == 0);
+    assert(credentials != NULL);
+    assert(strcmp(credentials->ssid, "new-wifi") == 0);
     if (context->transaction != NULL) {
         aiqa_config_record_t active = {0};
         context->reentrant_read_status = aiqa_config_transaction_copy_active(
@@ -80,12 +80,12 @@ static bool fake_trial(void *opaque, const aiqa_secret_config_t *secrets)
     return context->trial_ok;
 }
 
-static bool fake_restore(void *opaque, const aiqa_secret_config_t *secrets)
+static bool fake_restore(void *opaque, const aiqa_wifi_credentials_t *credentials)
 {
     fake_context_t *context = opaque;
     trace(context, 'R');
-    assert(secrets != NULL);
-    assert(strcmp(secrets->wifi_ssid, "old-wifi") == 0);
+    assert(credentials != NULL);
+    assert(strcmp(credentials->ssid, "old-wifi") == 0);
     return context->restore_ok;
 }
 

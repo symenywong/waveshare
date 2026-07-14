@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 
+static void secure_zero(void *value, size_t value_size);
+
 static size_t bounded_strlen(const char *value, size_t max_len)
 {
     if (value == NULL) {
@@ -183,25 +185,65 @@ aiqa_secret_config_t aiqa_secret_config_empty(void)
     return secrets;
 }
 
-aiqa_secret_status_t aiqa_wifi_secret_config_validate(const aiqa_secret_config_t *secrets)
+aiqa_secret_status_t aiqa_wifi_credentials_validate(const aiqa_wifi_credentials_t *credentials)
 {
-    if (secrets == NULL || secrets->wifi_ssid[0] == '\0') {
+    if (credentials == NULL || credentials->ssid[0] == '\0') {
         return AIQA_SECRET_ERR_WIFI_SSID;
     }
 
-    size_t ssid_len = bounded_strlen(secrets->wifi_ssid, sizeof(secrets->wifi_ssid));
-    if (ssid_len == 0 || ssid_len >= sizeof(secrets->wifi_ssid)) {
+    size_t ssid_len = bounded_strlen(credentials->ssid, sizeof(credentials->ssid));
+    if (ssid_len == 0 || ssid_len >= sizeof(credentials->ssid)) {
         return AIQA_SECRET_ERR_WIFI_SSID;
     }
 
-    size_t password_len = bounded_strlen(secrets->wifi_password, sizeof(secrets->wifi_password));
-    if (password_len >= sizeof(secrets->wifi_password) ||
+    size_t password_len = bounded_strlen(credentials->password, sizeof(credentials->password));
+    if (password_len >= sizeof(credentials->password) ||
         (password_len > 0 && password_len < 8) ||
         password_len > 63) {
         return AIQA_SECRET_ERR_WIFI_PASSWORD;
     }
 
     return AIQA_SECRET_OK;
+}
+
+void aiqa_wifi_credentials_secure_clear(aiqa_wifi_credentials_t *credentials)
+{
+    if (credentials != NULL) {
+        secure_zero(credentials, sizeof(*credentials));
+    }
+}
+
+bool aiqa_wifi_credentials_from_secrets(
+    const aiqa_secret_config_t *secrets,
+    aiqa_wifi_credentials_t *credentials)
+{
+    if (secrets == NULL || credentials == NULL) {
+        return false;
+    }
+    aiqa_wifi_credentials_t projected = {0};
+    (void)memcpy(projected.ssid, secrets->wifi_ssid, sizeof(projected.ssid));
+    (void)memcpy(projected.password, secrets->wifi_password, sizeof(projected.password));
+    if (aiqa_wifi_credentials_validate(&projected) != AIQA_SECRET_OK) {
+        aiqa_wifi_credentials_secure_clear(&projected);
+        aiqa_wifi_credentials_secure_clear(credentials);
+        return false;
+    }
+    *credentials = projected;
+    aiqa_wifi_credentials_secure_clear(&projected);
+    return true;
+}
+
+aiqa_secret_status_t aiqa_wifi_secret_config_validate(const aiqa_secret_config_t *secrets)
+{
+    if (secrets == NULL) {
+        return AIQA_SECRET_ERR_WIFI_SSID;
+    }
+    aiqa_wifi_credentials_t credentials = {0};
+    (void)memcpy(credentials.ssid, secrets->wifi_ssid, sizeof(credentials.ssid));
+    (void)memcpy(credentials.password, secrets->wifi_password, sizeof(credentials.password));
+    const aiqa_secret_status_t status = aiqa_wifi_credentials_validate(&credentials);
+    aiqa_wifi_credentials_secure_clear(&credentials);
+    return status;
 }
 
 aiqa_secret_status_t aiqa_secret_config_validate(const aiqa_secret_config_t *secrets)

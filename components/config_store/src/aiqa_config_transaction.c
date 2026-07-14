@@ -211,6 +211,16 @@ aiqa_config_transaction_status_t aiqa_config_transaction_apply_wifi(
 
     candidate.revision = next_revision;
     candidate.active_slot = inactive_slot(impl->active.active_slot);
+    aiqa_wifi_credentials_t candidate_wifi = {0};
+    aiqa_wifi_credentials_t active_wifi = {0};
+    if (!aiqa_wifi_credentials_from_secrets(&candidate.secrets, &candidate_wifi) ||
+        !aiqa_wifi_credentials_from_secrets(&impl->active.secrets, &active_wifi)) {
+        aiqa_wifi_credentials_secure_clear(&candidate_wifi);
+        aiqa_wifi_credentials_secure_clear(&active_wifi);
+        secure_zero(&candidate, sizeof(candidate));
+        unlock_apply(impl);
+        return AIQA_CONFIG_TRANSACTION_ERR_INVALID_ARGUMENT;
+    }
     aiqa_config_transaction_status_t result = AIQA_CONFIG_TRANSACTION_OK;
     const aiqa_config_storage_ports_t *storage = &impl->ports.storage;
     const aiqa_config_network_ports_t *network = &impl->ports.network;
@@ -228,8 +238,8 @@ aiqa_config_transaction_status_t aiqa_config_transaction_apply_wifi(
                            : AIQA_CONFIG_TRANSACTION_ERR_CANDIDATE_CLEANUP_FAILED;
         goto done;
     }
-    if (!network->trial_connect(network->context, &candidate.secrets)) {
-        const bool restored = network->restore_connect(network->context, &impl->active.secrets);
+    if (!network->trial_connect(network->context, &candidate_wifi)) {
+        const bool restored = network->restore_connect(network->context, &active_wifi);
         const bool discarded = storage->discard(storage->context, candidate.active_slot);
         impl->recovery_required = !restored || !discarded;
         if (!restored) {
@@ -257,7 +267,7 @@ aiqa_config_transaction_status_t aiqa_config_transaction_apply_wifi(
         goto done;
     }
     if (activation == AIQA_CONFIG_ACTIVATION_NOT_COMMITTED) {
-        const bool restored = network->restore_connect(network->context, &impl->active.secrets);
+        const bool restored = network->restore_connect(network->context, &active_wifi);
         const bool discarded = storage->discard(storage->context, candidate.active_slot);
         impl->recovery_required = !restored || !discarded;
         if (!restored) {
@@ -277,6 +287,8 @@ aiqa_config_transaction_status_t aiqa_config_transaction_apply_wifi(
     }
 
 done:
+    aiqa_wifi_credentials_secure_clear(&candidate_wifi);
+    aiqa_wifi_credentials_secure_clear(&active_wifi);
     secure_zero(&candidate, sizeof(candidate));
     unlock_apply(impl);
     return result;

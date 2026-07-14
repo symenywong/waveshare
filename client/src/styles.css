@@ -83,7 +83,19 @@ h2 { margin: 0; font-size: clamp(28px, 3.5vw, 46px); letter-spacing: -.04em; }
 .simulation-notice { margin: -18px 0 28px; border: 1px solid rgba(255,182,92,.25); border-radius: 8px; padding: 10px 12px; color: var(--amber); background: rgba(255,182,92,.05); font-size: 12px; line-height: 1.5; }
 .loading-line, .coming-soon, .load-error { color: var(--muted); }
 .load-error button { border: 1px solid var(--line); border-radius: 7px; padding: 9px 12px; color: var(--ink); background: var(--panel); cursor: pointer; }
+.inline-error { margin: -20px 0 20px; color: var(--danger); font-size: 13px; }
 .coming-soon p:last-child { max-width: 42ch; line-height: 1.7; }
+.secondary-action { margin-top: 4px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; color: var(--ink); background: transparent; cursor: pointer; white-space: nowrap; }
+.secondary-action:hover { border-color: rgba(133,240,191,.45); background: rgba(133,240,191,.05); }
+.device-overview { max-width: 760px; }
+.overview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.overview-grid article { min-height: 118px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: rgba(12,17,14,.5); display: grid; align-content: space-between; }
+.overview-grid span, .model-summary span { color: var(--muted); font: 9px ui-monospace, monospace; letter-spacing: .13em; text-transform: uppercase; }
+.overview-grid strong { margin: 12px 0 4px; color: var(--mint); font: 700 19px ui-monospace, monospace; overflow-wrap: anywhere; }
+.overview-grid small { color: #aeb9b1; font-size: 11px; }
+.model-summary { margin-top: 22px; border-top: 1px solid var(--line); }
+.model-summary div { display: grid; grid-template-columns: minmax(120px, .7fr) minmax(0, 1.3fr); gap: 16px; padding: 13px 2px; border-bottom: 1px solid var(--line); align-items: center; }
+.model-summary strong { color: #d9e1db; font: 12px ui-monospace, monospace; overflow-wrap: anywhere; }
 
 @media (max-width: 980px) {
   .workspace { grid-template-columns: 1fr; }
@@ -100,6 +112,7 @@ h2 { margin: 0; font-size: clamp(28px, 3.5vw, 46px); letter-spacing: -.04em; }
   .control-panel nav button { min-width: 68px; text-align: center; }
   .panel-body { padding: 28px 20px 40px; }
   .section-heading { display: grid; }
+  .overview-grid { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

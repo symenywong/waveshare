@@ -83,39 +83,47 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 
 static esp_err_t cleanup_partial_wifi_initialization(void)
 {
+    esp_err_t first_error = ESP_OK;
     if (s_ip_event_instance != NULL) {
         esp_err_t ret = esp_event_handler_instance_unregister(
             IP_EVENT, IP_EVENT_STA_GOT_IP, s_ip_event_instance);
-        if (ret != ESP_OK) {
-            return ret;
+        if (ret == ESP_OK) {
+            s_ip_event_instance = NULL;
+        } else {
+            first_error = ret;
         }
-        s_ip_event_instance = NULL;
     }
     if (s_wifi_event_instance != NULL) {
         esp_err_t ret = esp_event_handler_instance_unregister(
             WIFI_EVENT, ESP_EVENT_ANY_ID, s_wifi_event_instance);
-        if (ret != ESP_OK) {
-            return ret;
+        if (ret == ESP_OK) {
+            s_wifi_event_instance = NULL;
+        } else if (first_error == ESP_OK) {
+            first_error = ret;
         }
-        s_wifi_event_instance = NULL;
     }
     if (s_wifi_driver_initialized) {
         esp_err_t ret = esp_wifi_deinit();
-        if (ret != ESP_OK) {
-            return ret;
+        if (ret == ESP_OK) {
+            s_wifi_driver_initialized = false;
+            s_ip_event_instance = NULL;
+            s_wifi_event_instance = NULL;
+        } else if (first_error == ESP_OK) {
+            first_error = ret;
         }
-        s_wifi_driver_initialized = false;
     }
-    if (s_wifi_netif != NULL) {
-        esp_netif_destroy_default_wifi(s_wifi_netif);
-        s_wifi_netif = NULL;
+    if (!s_wifi_driver_initialized) {
+        if (s_wifi_netif != NULL) {
+            esp_netif_destroy_default_wifi(s_wifi_netif);
+            s_wifi_netif = NULL;
+        }
+        if (s_wifi_event_group != NULL) {
+            vEventGroupDelete(s_wifi_event_group);
+            s_wifi_event_group = NULL;
+        }
+        s_wifi_initialized = false;
     }
-    if (s_wifi_event_group != NULL) {
-        vEventGroupDelete(s_wifi_event_group);
-        s_wifi_event_group = NULL;
-    }
-    s_wifi_initialized = false;
-    return ESP_OK;
+    return first_error;
 }
 
 static esp_err_t ensure_wifi_initialized(void)
@@ -198,7 +206,7 @@ static void secure_zero(void *value, size_t value_size)
 }
 
 static esp_err_t connect_wifi_with_policy(
-    const aiqa_secret_config_t *secrets,
+    const aiqa_wifi_credentials_t *credentials,
     const aiqa_net_policy_t *policy)
 {
     esp_err_t ret = ensure_wifi_initialized();
@@ -207,17 +215,17 @@ static esp_err_t connect_wifi_with_policy(
     }
 
     wifi_config_t wifi_config = {0};
-    size_t ssid_len = strlen(secrets->wifi_ssid);
-    size_t password_len = strlen(secrets->wifi_password);
+    size_t ssid_len = strlen(credentials->ssid);
+    size_t password_len = strlen(credentials->password);
     if (ssid_len == 0 || ssid_len > sizeof(wifi_config.sta.ssid) ||
         password_len >= sizeof(wifi_config.sta.password)) {
         secure_zero(&wifi_config, sizeof(wifi_config));
         return ESP_ERR_INVALID_ARG;
     }
-    (void)memcpy(wifi_config.sta.ssid, secrets->wifi_ssid, ssid_len);
-    (void)memcpy(wifi_config.sta.password, secrets->wifi_password, password_len);
+    (void)memcpy(wifi_config.sta.ssid, credentials->ssid, ssid_len);
+    (void)memcpy(wifi_config.sta.password, credentials->password, password_len);
     wifi_config.sta.threshold.authmode =
-        secrets->wifi_password[0] == '\0' ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
+        credentials->password[0] == '\0' ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
     wifi_config.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
 
     xEventGroupClearBits(s_wifi_event_group, AIQA_WIFI_CONNECTED_BIT | AIQA_WIFI_FAILED_BIT);
@@ -295,13 +303,13 @@ static esp_err_t sync_time_with_policy(const aiqa_net_policy_t *policy)
 }
 
 esp_err_t aiqa_net_connect_wifi(
-    const aiqa_secret_config_t *secrets,
+    const aiqa_wifi_credentials_t *credentials,
     const aiqa_net_policy_t *policy)
 {
-    if (secrets == NULL) {
+    if (credentials == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    aiqa_secret_status_t secret_status = aiqa_wifi_secret_config_validate(secrets);
+    aiqa_secret_status_t secret_status = aiqa_wifi_credentials_validate(credentials);
     if (secret_status != AIQA_SECRET_OK) {
         ESP_LOGE(TAG, "Cannot connect Wi-Fi; credential validation failed: %s",
                  aiqa_secret_status_name(secret_status));
@@ -310,7 +318,7 @@ esp_err_t aiqa_net_connect_wifi(
 
     aiqa_net_policy_t default_policy = aiqa_net_default_policy();
     const aiqa_net_policy_t *active_policy = policy != NULL ? policy : &default_policy;
-    return connect_wifi_with_policy(secrets, active_policy);
+    return connect_wifi_with_policy(credentials, active_policy);
 }
 
 esp_err_t aiqa_net_sync_time(const aiqa_net_policy_t *policy)
@@ -334,10 +342,17 @@ esp_err_t aiqa_net_disconnect_wifi(void)
     return ret == ESP_ERR_WIFI_NOT_STARTED ? ESP_OK : ret;
 }
 
-static bool transaction_connect(void *context, const aiqa_secret_config_t *secrets)
+esp_err_t aiqa_net_forget_wifi(void)
+{
+    const esp_err_t disconnect_ret = aiqa_net_disconnect_wifi();
+    const esp_err_t cleanup_ret = cleanup_partial_wifi_initialization();
+    return cleanup_ret != ESP_OK ? cleanup_ret : disconnect_ret;
+}
+
+static bool transaction_connect(void *context, const aiqa_wifi_credentials_t *credentials)
 {
     aiqa_net_transaction_adapter_t *adapter = context;
-    return adapter != NULL && aiqa_net_connect_wifi(secrets, &adapter->policy) == ESP_OK;
+    return adapter != NULL && aiqa_net_connect_wifi(credentials, &adapter->policy) == ESP_OK;
 }
 
 static void transaction_quarantine(void *context)
@@ -369,10 +384,10 @@ aiqa_config_network_ports_t aiqa_net_transaction_ports(
 }
 
 esp_err_t aiqa_net_connect_wifi_and_sync_time(
-    const aiqa_secret_config_t *secrets,
+    const aiqa_wifi_credentials_t *credentials,
     const aiqa_net_policy_t *policy)
 {
-    esp_err_t ret = aiqa_net_connect_wifi(secrets, policy);
+    esp_err_t ret = aiqa_net_connect_wifi(credentials, policy);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi connect failed: %s", esp_err_to_name(ret));
         return ret;

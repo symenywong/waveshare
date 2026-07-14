@@ -74,6 +74,9 @@ describe('WifiSettings', () => {
   it('shows a retry action when the initial device read fails', async () => {
     const transport: DeviceTransport = {
       mode: 'physical',
+      getDeviceStatus: async () => {
+        throw new Error('not reached')
+      },
       getWifiConfig: async () => {
         throw new Error('transport details must not leak')
       },
@@ -111,6 +114,9 @@ describe('WifiSettings', () => {
   it('does not render untrusted transport error details', async () => {
     const transport: DeviceTransport = {
       mode: 'physical',
+      getDeviceStatus: async () => {
+        throw new Error('not reached')
+      },
       getWifiConfig: async () => ({ revision: 1, ssid: 'office', hasPassword: true }),
       updateWifi: async () => {
         throw new Error('request contained correct-horse')

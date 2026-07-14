@@ -11,11 +11,13 @@ extern "C" {
 #endif
 
 esp_err_t aiqa_net_connect_wifi(
-    const aiqa_secret_config_t *secrets,
+    const aiqa_wifi_credentials_t *credentials,
     const aiqa_net_policy_t *policy);
 
 esp_err_t aiqa_net_sync_time(const aiqa_net_policy_t *policy);
 esp_err_t aiqa_net_disconnect_wifi(void);
+/* Network-owner-only reset path; deinitializes the driver to discard RAM credentials. */
+esp_err_t aiqa_net_forget_wifi(void);
 
 typedef struct {
     aiqa_net_policy_t policy;
@@ -30,7 +32,7 @@ aiqa_config_network_ports_t aiqa_net_transaction_ports(
     aiqa_net_transaction_adapter_t *adapter);
 
 esp_err_t aiqa_net_connect_wifi_and_sync_time(
-    const aiqa_secret_config_t *secrets,
+    const aiqa_wifi_credentials_t *credentials,
     const aiqa_net_policy_t *policy);
 
 #ifdef __cplusplus

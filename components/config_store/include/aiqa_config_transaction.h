@@ -54,8 +54,8 @@ typedef struct {
 
 typedef struct {
     void *context;
-    bool (*trial_connect)(void *context, const aiqa_secret_config_t *secrets);
-    bool (*restore_connect)(void *context, const aiqa_secret_config_t *secrets);
+    bool (*trial_connect)(void *context, const aiqa_wifi_credentials_t *credentials);
+    bool (*restore_connect)(void *context, const aiqa_wifi_credentials_t *credentials);
     /* Disconnects all candidate networking when durable activation is unknown. */
     void (*quarantine)(void *context);
 } aiqa_config_network_ports_t;

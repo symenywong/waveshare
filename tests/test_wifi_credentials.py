@@ -24,6 +24,13 @@ class WifiCredentialTests(unittest.TestCase):
                 assert(aiqa_wifi_secret_config_validate(&secrets) == AIQA_SECRET_OK);
                 assert(aiqa_secret_config_validate(&secrets) == AIQA_SECRET_ERR_CHAT_API_KEY);
 
+                aiqa_wifi_credentials_t credentials = {0};
+                assert(aiqa_wifi_credentials_from_secrets(&secrets, &credentials));
+                assert(strcmp(credentials.ssid, "lab-wifi") == 0);
+                assert(strcmp(credentials.password, "test-password") == 0);
+                assert(aiqa_wifi_credentials_validate(&credentials) == AIQA_SECRET_OK);
+                assert(sizeof(credentials) == AIQA_MAX_WIFI_SSID_LEN + AIQA_MAX_WIFI_PASSWORD_LEN);
+
                 secrets.wifi_ssid[0] = '\\0';
                 assert(aiqa_wifi_secret_config_validate(&secrets) == AIQA_SECRET_ERR_WIFI_SSID);
                 (void)memset(secrets.wifi_ssid, 's', 32);

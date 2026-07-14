@@ -41,6 +41,11 @@ typedef struct {
     char asr_api_key[AIQA_MAX_API_KEY_LEN];
 } aiqa_secret_config_t;
 
+typedef struct {
+    char ssid[AIQA_MAX_WIFI_SSID_LEN];
+    char password[AIQA_MAX_WIFI_PASSWORD_LEN];
+} aiqa_wifi_credentials_t;
+
 typedef enum {
     AIQA_CONFIG_OK = 0,
     AIQA_CONFIG_ERR_VERSION,
@@ -89,6 +94,11 @@ aiqa_config_t aiqa_config_default(void);
 aiqa_config_status_t aiqa_config_validate(const aiqa_config_t *config);
 const char *aiqa_config_status_name(aiqa_config_status_t status);
 aiqa_secret_config_t aiqa_secret_config_empty(void);
+aiqa_secret_status_t aiqa_wifi_credentials_validate(const aiqa_wifi_credentials_t *credentials);
+bool aiqa_wifi_credentials_from_secrets(
+    const aiqa_secret_config_t *secrets,
+    aiqa_wifi_credentials_t *credentials);
+void aiqa_wifi_credentials_secure_clear(aiqa_wifi_credentials_t *credentials);
 aiqa_secret_status_t aiqa_wifi_secret_config_validate(const aiqa_secret_config_t *secrets);
 aiqa_secret_status_t aiqa_secret_config_validate(const aiqa_secret_config_t *secrets);
 const char *aiqa_secret_status_name(aiqa_secret_status_t status);

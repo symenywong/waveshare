@@ -24,6 +24,9 @@ describe('parseWifiUpdate', () => {
 
   it('validates device byte limits and password length', () => {
     expect(() =>
+      parseWifiUpdate({ baseRevision: 0, ssid: 'office', passwordAction: 'keep' }),
+    ).toThrow()
+    expect(() =>
       parseWifiUpdate({ baseRevision: 1, ssid: '', passwordAction: 'keep' }),
     ).toThrow('Wi-Fi 名称不能为空')
     expect(() =>
