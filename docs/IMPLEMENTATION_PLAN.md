@@ -151,13 +151,32 @@ Implemented:
   namespaces, and publishes the final result.
 - Host tests include a real concurrent slow-reader/completion case. Management
   service line coverage is above 90%; client line coverage is above 95%.
+- USB Serial/JTAG is now reserved for the management channel; firmware logs stay
+  on UART0 so log bytes cannot corrupt management frames.
+- Cross-platform `AQMG` v1 framing uses a fixed 12-byte big-endian header and a
+  4096-byte payload ceiling. The incremental C and TypeScript decoders cover
+  fragmented, coalesced, noisy, and oversized input.
+- The first physical transport gate only exposes strict `system.hello`. It
+  rejects unknown fields, embedded NUL bytes, malformed IDs, and every sensitive
+  operation until an authenticated encrypted session exists.
+- The USB owner task keeps the decoder off the task stack, clears temporary
+  buffers, caps JSON depth, validates escapes before cJSON, rate-limits all
+  inbound bytes, samples malformed-input logs, and never logs untrusted payloads.
+- The browser Web Serial adapter can select a device, exchange and validate the
+  framed hello response, enforce a timeout, and close stalled connections without
+  displaying device-supplied error details.
 
 Next:
 
-- Implement the authenticated physical transport (USB serial first, then optional
-  BLE/Wi-Fi), its wire codec, pairing/session registry, rate limiting, and operation
-  polling adapter.
-- Enable production NVS/flash encryption.
+- Implement an audited PAKE (MbedTLS ECJPAKE) followed by HKDF-derived AEAD session
+  keys, monotonic replay counters, expiry, lockout, and a reset path. Do not open
+  status, Wi-Fi, provider, key, prompt, or debug methods before this boundary.
+- Add the authenticated operation polling adapter, then optionally reuse the same
+  encrypted protocol over BLE/Wi-Fi.
+- Before any production release, enable Secure Boot v2 plus release-mode Flash/NVS
+  encryption and run a separate, reviewed eFuse procedure for USB/Pad JTAG and ROM
+  download restrictions. Development boards must use a separate reversible profile;
+  the application-level USB protocol alone is not a hardware security boundary.
 - Add provider/model/key, assistant image, prompt, and simulation/debug write DTOs
   on top of the same transaction and authorization boundary.
 
