@@ -270,6 +270,17 @@ aiqa_pairing_result_t aiqa_secure_channel_decrypt(
   return AIQA_PAIRING_OK;
 }
 
+aiqa_pairing_result_t aiqa_secure_channel_copy_session_id(
+    const aiqa_secure_channel_t *channel,
+    uint8_t output[AIQA_PAIRING_SESSION_ID_SIZE]) {
+  if (output != NULL)
+    mbedtls_platform_zeroize(output, AIQA_PAIRING_SESSION_ID_SIZE);
+  if (channel == NULL || output == NULL)
+    return AIQA_PAIRING_INVALID_ARGUMENT;
+  (void)memcpy(output, channel->session_id, AIQA_PAIRING_SESSION_ID_SIZE);
+  return AIQA_PAIRING_OK;
+}
+
 void aiqa_secure_channel_destroy(aiqa_secure_channel_t **channel) {
   if (channel == NULL || *channel == NULL)
     return;

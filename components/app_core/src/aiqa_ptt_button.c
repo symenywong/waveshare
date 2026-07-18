@@ -2,7 +2,7 @@
 
 static uint32_t elapsed_ms(uint32_t now_ms, uint32_t then_ms)
 {
-    return now_ms >= then_ms ? now_ms - then_ms : 0;
+    return now_ms - then_ms;
 }
 
 aiqa_ptt_policy_t aiqa_ptt_default_policy(void)

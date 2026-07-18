@@ -22,6 +22,7 @@ typedef struct {
     bool restore_ok;
     aiqa_config_activation_result_t activation_result;
     bool discard_ok;
+    aiqa_config_slot_t discarded_slot;
     atomic_bool block_stage;
     atomic_bool stage_entered;
     atomic_bool release_stage;
@@ -115,7 +116,7 @@ static bool fake_discard(void *opaque, aiqa_config_slot_t slot)
 {
     fake_context_t *context = opaque;
     trace(context, 'D');
-    assert(slot == AIQA_CONFIG_SLOT_B);
+    context->discarded_slot = slot;
     return context->discard_ok;
 }
 
@@ -204,7 +205,8 @@ static void run_success(void)
     assert(aiqa_config_transaction_apply_wifi(&transaction, &request, &public_view) ==
            AIQA_CONFIG_TRANSACTION_OK);
     assert(strcmp(context.trace, "W V T A") != 0);
-    assert(strcmp(context.trace, "WVTA") == 0);
+    assert(strcmp(context.trace, "WVTAD") == 0);
+    assert(context.discarded_slot == AIQA_CONFIG_SLOT_A);
     assert(memcmp(&input, &original, sizeof(input)) == 0);
 
     aiqa_config_record_t active = {0};
@@ -258,6 +260,7 @@ static void run_storage_failures(void)
     assert(aiqa_config_transaction_apply_wifi(&stage_transaction, &request, NULL) ==
            AIQA_CONFIG_TRANSACTION_ERR_STAGE_FAILED);
     assert(strcmp(stage_context.trace, "WD") == 0);
+    assert(stage_context.discarded_slot == AIQA_CONFIG_SLOT_B);
     assert_active_unchanged(&stage_transaction, &input);
 
     fake_context_t verify_context = make_context();
@@ -268,6 +271,7 @@ static void run_storage_failures(void)
     assert(aiqa_config_transaction_apply_wifi(&verify_transaction, &request, NULL) ==
            AIQA_CONFIG_TRANSACTION_ERR_VERIFY_FAILED);
     assert(strcmp(verify_context.trace, "WVD") == 0);
+    assert(verify_context.discarded_slot == AIQA_CONFIG_SLOT_B);
     assert_active_unchanged(&verify_transaction, &input);
 }
 
@@ -283,6 +287,7 @@ static void run_trial_failure(bool restore_ok, aiqa_config_transaction_status_t 
     aiqa_wifi_update_t request = make_request();
     assert(aiqa_config_transaction_apply_wifi(&transaction, &request, NULL) == expected);
     assert(strcmp(context.trace, "WVTRD") == 0);
+    assert(context.discarded_slot == AIQA_CONFIG_SLOT_B);
     if (restore_ok) {
         assert_active_unchanged(&transaction, &input);
     } else {
@@ -306,6 +311,7 @@ static void run_activation_failure(void)
     assert(aiqa_config_transaction_apply_wifi(&transaction, &request, NULL) ==
            AIQA_CONFIG_TRANSACTION_ERR_ACTIVATE_FAILED_ROLLED_BACK);
     assert(strcmp(context.trace, "WVTARD") == 0);
+    assert(context.discarded_slot == AIQA_CONFIG_SLOT_B);
     assert_active_unchanged(&transaction, &input);
 }
 
@@ -345,7 +351,8 @@ static void run_reentrant(void)
            AIQA_CONFIG_TRANSACTION_OK);
     assert(context.reentrant_status == AIQA_CONFIG_TRANSACTION_ERR_BUSY);
     assert(context.reentrant_read_status == AIQA_CONFIG_TRANSACTION_READ_BUSY);
-    assert(strcmp(context.trace, "WVTA") == 0);
+    assert(strcmp(context.trace, "WVTAD") == 0);
+    assert(context.discarded_slot == AIQA_CONFIG_SLOT_A);
 }
 
 typedef struct {
@@ -389,7 +396,8 @@ static void run_parallel(void)
     atomic_store(&context.release_stage, true);
     assert(pthread_join(worker, NULL) == 0);
     assert(args.result == AIQA_CONFIG_TRANSACTION_OK);
-    assert(strcmp(context.trace, "WVTA") == 0);
+    assert(strcmp(context.trace, "WVTAD") == 0);
+    assert(context.discarded_slot == AIQA_CONFIG_SLOT_A);
 }
 
 static void run_activation_indeterminate(void)
@@ -428,6 +436,27 @@ static void run_cleanup_failure(void)
     assert(aiqa_config_transaction_apply_wifi(&transaction, &request, NULL) ==
            AIQA_CONFIG_TRANSACTION_ERR_RECOVERY_REQUIRED);
     assert(strcmp(context.trace, "WD") == 0);
+}
+
+static void run_retired_slot_cleanup_failure(void)
+{
+    aiqa_config_record_t input = make_active();
+    fake_context_t context = make_context();
+    context.discard_ok = false;
+    aiqa_config_transaction_ports_t ports = make_ports(&context);
+    aiqa_config_transaction_t transaction;
+    assert(aiqa_config_transaction_init(&transaction, &input, &ports));
+    aiqa_wifi_update_t request = make_request();
+    assert(aiqa_config_transaction_apply_wifi(&transaction, &request, NULL) ==
+           AIQA_CONFIG_TRANSACTION_ERR_RETIRED_SLOT_CLEANUP_FAILED);
+    assert(strcmp(context.trace, "WVTAD") == 0);
+    assert(context.discarded_slot == AIQA_CONFIG_SLOT_A);
+
+    aiqa_config_record_t copied = {0};
+    assert(aiqa_config_transaction_copy_active(&transaction, &copied) ==
+           AIQA_CONFIG_TRANSACTION_READ_RECOVERY_REQUIRED);
+    assert(aiqa_config_transaction_apply_wifi(&transaction, &request, NULL) ==
+           AIQA_CONFIG_TRANSACTION_ERR_RECOVERY_REQUIRED);
 }
 
 static void run_api_edges(void)
@@ -519,6 +548,7 @@ static void run_api_edges(void)
         AIQA_CONFIG_TRANSACTION_ERR_NETWORK_RECOVERY_FAILED,
         AIQA_CONFIG_TRANSACTION_ERR_ACTIVATION_INDETERMINATE,
         AIQA_CONFIG_TRANSACTION_ERR_CANDIDATE_CLEANUP_FAILED,
+        AIQA_CONFIG_TRANSACTION_ERR_RETIRED_SLOT_CLEANUP_FAILED,
         AIQA_CONFIG_TRANSACTION_ERR_RECOVERY_REQUIRED,
     };
     for (size_t i = 0; i < sizeof(statuses) / sizeof(statuses[0]); ++i) {
@@ -572,6 +602,8 @@ int main(int argc, char **argv)
         run_activation_indeterminate();
     } else if (strcmp(argv[1], "cleanup_failure") == 0) {
         run_cleanup_failure();
+    } else if (strcmp(argv[1], "retired_slot_cleanup_failure") == 0) {
+        run_retired_slot_cleanup_failure();
     } else if (strcmp(argv[1], "api_edges") == 0) {
         run_api_edges();
     } else {

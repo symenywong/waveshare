@@ -87,3 +87,12 @@ aiqa_event_t aiqa_runtime_asr_result_to_event(const aiqa_asr_result_t *result, e
         return (aiqa_event_t){.type = AIQA_EVENT_ASR_FAILED, .error = AIQA_ERROR_ASR_FAILED, .value = status};
     }
 }
+
+aiqa_event_t aiqa_runtime_asr_failure_event(uint32_t generation)
+{
+    return (aiqa_event_t){
+        .type = AIQA_EVENT_ASR_FAILED,
+        .error = AIQA_ERROR_ASR_FAILED,
+        .value = generation,
+    };
+}

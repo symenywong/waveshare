@@ -242,6 +242,7 @@ static esp_err_t chat_send_request(
     const char *prompt,
     const char *response_language,
     const char *conversation_context,
+    const char *assistant_profile_context,
     bool stream,
     aiqa_chat_event_cb_t on_delta,
     void *user_ctx,
@@ -278,7 +279,7 @@ static esp_err_t chat_send_request(
         .max_completion_tokens = config->max_completion_tokens,
         .response_language = response_language,
         .conversation_context = conversation_context,
-        .assistant_profile_context = NULL,
+        .assistant_profile_context = assistant_profile_context,
     };
     char *request_body = (char *)malloc(AIQA_CHAT_REQUEST_MAX_LEN);
     char *response_body = (char *)malloc(AIQA_CHAT_HTTP_RESPONSE_MAX_LEN);
@@ -438,12 +439,32 @@ esp_err_t aiqa_chat_send_once_with_context(
     const char *conversation_context,
     aiqa_chat_result_t *result)
 {
+    return aiqa_chat_send_once_with_contexts(
+        config,
+        secrets,
+        prompt,
+        response_language,
+        conversation_context,
+        NULL,
+        result);
+}
+
+esp_err_t aiqa_chat_send_once_with_contexts(
+    const aiqa_config_t *config,
+    const aiqa_secret_config_t *secrets,
+    const char *prompt,
+    const char *response_language,
+    const char *conversation_context,
+    const char *assistant_profile_context,
+    aiqa_chat_result_t *result)
+{
     return chat_send_request(
         config,
         secrets,
         prompt,
         response_language,
         conversation_context,
+        assistant_profile_context,
         false,
         NULL,
         NULL,
@@ -498,12 +519,36 @@ esp_err_t aiqa_chat_send_streaming_with_context(
     void *user_ctx,
     aiqa_chat_result_t *result)
 {
+    return aiqa_chat_send_streaming_with_contexts(
+        config,
+        secrets,
+        prompt,
+        response_language,
+        conversation_context,
+        NULL,
+        on_delta,
+        user_ctx,
+        result);
+}
+
+esp_err_t aiqa_chat_send_streaming_with_contexts(
+    const aiqa_config_t *config,
+    const aiqa_secret_config_t *secrets,
+    const char *prompt,
+    const char *response_language,
+    const char *conversation_context,
+    const char *assistant_profile_context,
+    aiqa_chat_event_cb_t on_delta,
+    void *user_ctx,
+    aiqa_chat_result_t *result)
+{
     return chat_send_request(
         config,
         secrets,
         prompt,
         response_language,
         conversation_context,
+        assistant_profile_context,
         true,
         on_delta,
         user_ctx,

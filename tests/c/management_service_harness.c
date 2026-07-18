@@ -40,16 +40,27 @@ typedef struct {
 
 static bool authorize(
     void *opaque,
-    uint32_t session_id,
+    const aiqa_management_security_context_t *access,
     aiqa_management_capability_t capability)
 {
     fake_context_t *context = opaque;
-    if (session_id != 7U) {
+    if (access == NULL || access->connection_generation != 3U ||
+        access->authorization_generation != 7U || access->session_id[7] != 7U) {
         return false;
     }
     return capability == AIQA_MANAGEMENT_CAPABILITY_READ
                ? context->authorize_read
                : context->authorize_manage;
+}
+
+static aiqa_management_security_context_t make_access(void)
+{
+    aiqa_management_security_context_t access = {
+        .connection_generation = 3,
+        .authorization_generation = 7,
+    };
+    access.session_id[7] = 7;
+    return access;
 }
 
 static bool copy_status(void *opaque, aiqa_management_device_status_t *out_status)
@@ -165,7 +176,7 @@ static void run_read(void)
 {
     fake_context_t context = make_context();
     aiqa_management_service_t service = make_service(&context);
-    const aiqa_management_security_context_t access = {.session_id = 7};
+    const aiqa_management_security_context_t access = make_access();
 
     aiqa_management_device_status_t status = {0};
     assert(aiqa_management_service_get_status(&service, &access, &status) ==
@@ -203,7 +214,7 @@ static void run_security(void)
     uint32_t operation_id = 99;
     context.authorize_read = true;
     context.authorize_manage = false;
-    const aiqa_management_security_context_t read_only = {.session_id = 7};
+    const aiqa_management_security_context_t read_only = make_access();
     assert(aiqa_management_service_submit_wifi_update(
                &service, &read_only, &update, &operation_id) ==
            AIQA_MANAGEMENT_FORBIDDEN);
@@ -215,7 +226,7 @@ static void run_submit(void)
 {
     fake_context_t context = make_context();
     aiqa_management_service_t service = make_service(&context);
-    const aiqa_management_security_context_t access = {.session_id = 7};
+    const aiqa_management_security_context_t access = make_access();
     aiqa_management_owned_wifi_update_t update = {
         .base_revision = 4,
         .password_action = AIQA_WIFI_PASSWORD_REPLACE,
@@ -251,7 +262,7 @@ static void run_validation(void)
 {
     fake_context_t context = make_context();
     aiqa_management_service_t service = make_service(&context);
-    const aiqa_management_security_context_t access = {.session_id = 7};
+    const aiqa_management_security_context_t access = make_access();
     aiqa_management_owned_wifi_update_t update = {
         .base_revision = 4,
         .password_action = AIQA_WIFI_PASSWORD_REPLACE,
@@ -323,7 +334,7 @@ static void run_concurrency(void)
 {
     fake_context_t context = make_context();
     aiqa_management_service_t service = make_service(&context);
-    const aiqa_management_security_context_t access = {.session_id = 7};
+    const aiqa_management_security_context_t access = make_access();
     aiqa_management_owned_wifi_update_t update = {
         .base_revision = 4,
         .password_action = AIQA_WIFI_PASSWORD_CLEAR,
@@ -358,7 +369,7 @@ static void run_edges(void)
     fake_context_t context = make_context();
     aiqa_management_ports_t ports = make_ports(&context);
     aiqa_management_service_t service = {0};
-    const aiqa_management_security_context_t access = {.session_id = 7};
+    const aiqa_management_security_context_t access = make_access();
     aiqa_management_device_status_t status = {0};
     aiqa_management_public_config_t config = {0};
     aiqa_management_owned_wifi_update_t update = {

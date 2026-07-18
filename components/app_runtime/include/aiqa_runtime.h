@@ -26,6 +26,10 @@ aiqa_management_result_t aiqa_runtime_management_submit_wifi_update(
     const aiqa_management_owned_wifi_update_t *update,
     uint32_t *out_operation_id);
 
+/* Pairing owner callbacks; UI task remains the sole display owner. */
+bool aiqa_runtime_management_show_pairing_code(const uint8_t code[8]);
+bool aiqa_runtime_management_clear_pairing_code(void);
+
 #ifdef __cplusplus
 }
 #endif

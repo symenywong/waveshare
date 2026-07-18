@@ -1,5 +1,6 @@
 #pragma once
 
+#include "aiqa_management_access.h"
 #include "aiqa_config_nvs.h"
 #include "aiqa_state_machine.h"
 
@@ -109,10 +110,6 @@ typedef struct {
     char password[AIQA_MAX_WIFI_PASSWORD_LEN];
 } aiqa_management_owned_wifi_update_t;
 
-typedef struct {
-    uint32_t session_id;
-} aiqa_management_security_context_t;
-
 typedef enum {
     AIQA_MANAGEMENT_CAPABILITY_READ = 0,
     AIQA_MANAGEMENT_CAPABILITY_MANAGE_CONFIG,
@@ -122,7 +119,7 @@ typedef struct {
     void *context;
     bool (*authorize)(
         void *context,
-        uint32_t session_id,
+        const aiqa_management_security_context_t *access,
         aiqa_management_capability_t capability);
     bool (*copy_status)(void *context, aiqa_management_device_status_t *out_status);
     bool (*copy_public_config)(void *context, aiqa_management_public_config_t *out_config);

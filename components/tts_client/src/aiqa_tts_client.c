@@ -1,4 +1,5 @@
 #include "aiqa_tts_client.h"
+#include "aiqa_tts_stream_buffer.h"
 
 #include "aiqa_provider.h"
 #include "esp_check.h"
@@ -181,22 +182,33 @@ static void process_stream_event(aiqa_tts_stream_context_t *context, char *event
         return;
     }
 
+    const size_t audio_b64_len = strlen(context->audio_b64);
     size_t pcm_len = 0;
     const int b64_ret = mbedtls_base64_decode(context->pcm,
                                               sizeof(context->pcm),
                                               &pcm_len,
                                               (const unsigned char *)context->audio_b64,
-                                              strlen(context->audio_b64));
-    secure_zero(context->audio_b64, sizeof(context->audio_b64));
+                                              audio_b64_len);
+    if (!aiqa_tts_secure_clear_used(
+            context->audio_b64, sizeof(context->audio_b64), audio_b64_len)) {
+        set_stream_overflow(context, "audio_b64_clear");
+        return;
+    }
     if (b64_ret != 0 || pcm_len == 0 || pcm_len > sizeof(context->pcm)) {
+        const size_t decoded_bytes = pcm_len <= sizeof(context->pcm)
+                                         ? pcm_len
+                                         : sizeof(context->pcm);
+        (void)aiqa_tts_secure_clear_used(
+            context->pcm, sizeof(context->pcm), decoded_bytes);
         set_stream_overflow(context, "base64_decode");
         return;
     }
 
-    if (context->on_audio != NULL &&
-        !context->on_audio(context->pcm, pcm_len, context->user_ctx)) {
+    const bool audio_accepted = context->on_audio == NULL ||
+                                context->on_audio(context->pcm, pcm_len, context->user_ctx);
+    (void)aiqa_tts_secure_clear_used(context->pcm, sizeof(context->pcm), pcm_len);
+    if (!audio_accepted) {
         context->abort_requested = true;
-        secure_zero(context->pcm, sizeof(context->pcm));
         return;
     }
     log_stream_audio_progress(context->result, pcm_len);
@@ -204,7 +216,6 @@ static void process_stream_event(aiqa_tts_stream_context_t *context, char *event
         context->result->audio_bytes += pcm_len;
         context->result->audio_chunks += 1;
     }
-    secure_zero(context->pcm, sizeof(context->pcm));
 }
 
 static void process_stream_chunk(aiqa_tts_stream_context_t *context, const char *chunk, size_t chunk_len)

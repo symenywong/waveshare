@@ -360,6 +360,7 @@ static void initialize_empty_snapshot(aiqa_config_snapshot_t *snapshot)
     snapshot->secrets = aiqa_secret_config_empty();
     snapshot->user_prefs.volume_percent = 10;
     snapshot->user_prefs.assistant_profile = aiqa_assistant_profile_default();
+    snapshot->user_prefs.dialogue_language = aiqa_language_default();
     snapshot->config_status = AIQA_CONFIG_OK;
     snapshot->secret_status = AIQA_SECRET_ERR_WIFI_SSID;
     snapshot->revision = 1;
@@ -422,6 +423,14 @@ static esp_err_t load_active_record_unlocked(aiqa_config_record_t *record, bool 
                         &migrated, AIQA_CONFIG_SLOT_LEGACY, record->revision);
                 if (activation == AIQA_CONFIG_ACTIVATION_COMMITTED) {
                     *record = migrated;
+                    if (!aiqa_config_nvs_discard_record(
+                            AIQA_CONFIG_SLOT_LEGACY)) {
+                        aiqa_config_record_secure_clear(&migrated);
+                        aiqa_config_record_secure_clear(record);
+                        aiqa_config_snapshot_secure_clear(&legacy);
+                        *found = false;
+                        return ESP_ERR_INVALID_STATE;
+                    }
                 } else if (activation == AIQA_CONFIG_ACTIVATION_INDETERMINATE) {
                     aiqa_config_record_secure_clear(&migrated);
                     aiqa_config_record_secure_clear(record);
@@ -461,6 +470,10 @@ static esp_err_t load_active_record_unlocked(aiqa_config_record_t *record, bool 
         return ret;
     }
     if (record->revision != revision) {
+        aiqa_config_record_secure_clear(record);
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!aiqa_config_nvs_discard_record(AIQA_CONFIG_SLOT_LEGACY)) {
         aiqa_config_record_secure_clear(record);
         return ESP_ERR_INVALID_STATE;
     }
@@ -676,7 +689,7 @@ aiqa_config_activation_result_t aiqa_config_nvs_activate_record(
         ret = nvs_set_u64(handle, AIQA_NVS_KEY_HEAD, target);
     }
     if (ret == ESP_OK) {
-        (void)nvs_commit(handle);
+        ret = nvs_commit(handle);
     }
     if (handle != 0) {
         nvs_close(handle);
@@ -699,7 +712,9 @@ aiqa_config_activation_result_t aiqa_config_nvs_activate_record(
 
 bool aiqa_config_nvs_discard_record(aiqa_config_slot_t slot)
 {
-    const char *namespace_name = slot_namespace(slot);
+    const char *namespace_name = slot == AIQA_CONFIG_SLOT_LEGACY
+                                     ? AIQA_NVS_NAMESPACE_LEGACY
+                                     : slot_namespace(slot);
     if (namespace_name == NULL) {
         return false;
     }
@@ -711,13 +726,21 @@ bool aiqa_config_nvs_discard_record(aiqa_config_slot_t slot)
     if (head_ret == ESP_OK) {
         aiqa_config_slot_t active_slot = AIQA_CONFIG_SLOT_LEGACY;
         uint32_t active_revision = 0;
-        if (!decode_head(current_head, &active_slot, &active_revision) || active_slot == slot) {
+        if (!decode_head(current_head, &active_slot, &active_revision) ||
+            active_slot == slot) {
             unlock_storage();
             return false;
         }
-    } else if (head_ret != ESP_ERR_NVS_NOT_FOUND) {
+    } else if (head_ret != ESP_ERR_NVS_NOT_FOUND ||
+               slot == AIQA_CONFIG_SLOT_LEGACY) {
         unlock_storage();
         return false;
+    }
+    if (slot == AIQA_CONFIG_SLOT_LEGACY) {
+        const bool discarded =
+            aiqa_config_erase_legacy_record_from_nvs() == ESP_OK;
+        unlock_storage();
+        return discarded;
     }
     nvs_handle_t handle = 0;
     esp_err_t ret = nvs_open(namespace_name, NVS_READWRITE, &handle);
@@ -725,10 +748,14 @@ bool aiqa_config_nvs_discard_record(aiqa_config_slot_t slot)
         ret = nvs_erase_all(handle);
     }
     if (ret == ESP_OK) {
-        (void)nvs_commit(handle);
+        ret = nvs_commit(handle);
     }
     if (handle != 0) {
         nvs_close(handle);
+    }
+    if (ret != ESP_OK) {
+        unlock_storage();
+        return false;
     }
 
     ret = nvs_open(namespace_name, NVS_READONLY, &handle);

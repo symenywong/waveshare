@@ -1,0 +1,6 @@
+# Name,   Type, SubType,  Offset,  Size,   Flags
+nvs,      data, nvs,      0x11000, 0x5000,
+nvs_keys, data, nvs_keys, 0x16000, 0x1000, encrypted
+phy_init, data, phy,      0x17000, 0x1000,
+factory,  app,  factory,  0x20000, 4M,
+storage,  data, spiffs,           , 8M,

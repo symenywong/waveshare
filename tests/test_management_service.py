@@ -21,6 +21,7 @@ class ManagementServiceTests(unittest.TestCase):
                 "-Werror",
                 "-fsanitize=address,undefined",
                 "-pthread",
+                f"-I{REPO_ROOT / 'components/management_access/include'}",
                 f"-I{REPO_ROOT / 'components/management_service/include'}",
                 f"-I{REPO_ROOT / 'components/config_store/include'}",
                 f"-I{REPO_ROOT / 'components/app_core/include'}",

@@ -167,7 +167,7 @@ aiqa_management_result_t aiqa_management_service_get_status(
         return AIQA_MANAGEMENT_INVALID_REQUEST;
     }
     if (!impl->ports.authorize(
-            impl->ports.context, access->session_id, AIQA_MANAGEMENT_CAPABILITY_READ)) {
+            impl->ports.context, access, AIQA_MANAGEMENT_CAPABILITY_READ)) {
         return AIQA_MANAGEMENT_FORBIDDEN;
     }
     aiqa_management_device_status_t status = {0};
@@ -200,7 +200,7 @@ aiqa_management_result_t aiqa_management_service_get_public_config(
         return AIQA_MANAGEMENT_INVALID_REQUEST;
     }
     if (!impl->ports.authorize(
-            impl->ports.context, access->session_id, AIQA_MANAGEMENT_CAPABILITY_READ)) {
+            impl->ports.context, access, AIQA_MANAGEMENT_CAPABILITY_READ)) {
         return AIQA_MANAGEMENT_FORBIDDEN;
     }
     const bool copied = impl->ports.copy_public_config(impl->ports.context, out_config);
@@ -225,7 +225,7 @@ aiqa_management_result_t aiqa_management_service_submit_wifi_update(
     }
     if (!impl->ports.authorize(
             impl->ports.context,
-            access->session_id,
+            access,
             AIQA_MANAGEMENT_CAPABILITY_MANAGE_CONFIG)) {
         return AIQA_MANAGEMENT_FORBIDDEN;
     }

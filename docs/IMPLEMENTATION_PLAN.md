@@ -128,16 +128,16 @@ Implemented:
 
 Implemented:
 
-- React/Vite management console with a simulated transport, live overview, device
-  screen preview, redacted model/key state, and Wi-Fi account/password editing.
+- React/Vite management console with simulated and physical Web Serial transports,
+  live overview, logical device-screen preview, redacted model/key state, and Wi-Fi
+  account/password editing.
 - Strict JSON/Zod status contract for runtime, heap, Wi-Fi, battery, current UI,
   redacted model configuration, and latest asynchronous operation.
 - Transport-independent firmware `management_service` with explicit public DTO
   allowlists; passwords, API keys, and base URLs are never returned.
-- Session authorization is delegated to a trusted server-side callback. Runtime
-  authorization currently fails closed until the pairing/authenticated transport
-  phase supplies a verified session registry; wire payloads cannot set permission
-  booleans.
+- Session authorization is delegated to the owner-minted management access registry.
+  Runtime operations require the active secure-channel generation and pairing
+  lifecycle state; wire payloads cannot set permission booleans.
 - Wi-Fi changes return an operation ID and run asynchronously through the single
   `net_task` owner. The client transport abstraction must poll `latestOperation`
   before returning the refreshed public Wi-Fi view.
@@ -156,9 +156,11 @@ Implemented:
 - Cross-platform `AQMG` v1 framing uses a fixed 12-byte big-endian header and a
   4096-byte payload ceiling. The incremental C and TypeScript decoders cover
   fragmented, coalesced, noisy, and oversized input.
-- The first physical transport gate only exposes strict `system.hello`. It
-  rejects unknown fields, embedded NUL bytes, malformed IDs, and every sensitive
-  operation until an authenticated encrypted session exists.
+- The unauthenticated physical transport surface exposes strict `system.hello` and
+  the locally gated pairing RPC sequence. It rejects unknown fields, embedded NUL
+  bytes, malformed IDs, and every management operation until an authenticated
+  encrypted session exists. Confirmed sessions expose only the allowlisted status,
+  public-configuration, and Wi-Fi methods.
 - The USB owner task keeps the decoder off the task stack, clears temporary
   buffers, caps JSON depth, validates escapes before cJSON, rate-limits all
   inbound bytes, samples malformed-input logs, and never logs untrusted payloads.
@@ -233,31 +235,92 @@ Implemented:
   reset persistence, and reboot round-trips. Both lifecycle and NVS adapter line
   and branch coverage exceed 80%.
 
-Next:
+### Device Management Pause Checkpoint (2026-07-14)
 
-- Add the remaining reviewed ESP-IDF adapters: seed a dedicated CTR-DRBG from
-  the bootloader entropy source before runtime RF/ADC/I2S tasks start, then add
-  monotonic time, acknowledged local display/clear, and synchronous connection
-  revocation. Pairing codes, nonces, and keys must never enter NVS or logs.
-- Add a BOOT-button local pairing gesture that cannot collide with the existing
-  long-press PTT behavior, plus an explicit local lockout-reset gesture and UI.
-- Add strict pairing RPC messages and two-way Finished exchange to the USB owner.
-  Do not activate a session until the client proof is verified and the device
-  proof has been fully sent. The USB owner must atomically install a confirmed
-  secure-channel generation; runtime authorization must require both that
-  generation and lifecycle `ACTIVE`, never `ACTIVE` alone. Status, Wi-Fi,
-  provider, key, prompt, and debug methods remain closed until this boundary is
-  complete.
-- Supply the browser through an audited ECJPAKE WASM/native provider boundary;
-  do not implement elliptic-curve PAKE arithmetic directly in TypeScript.
-- Add the authenticated operation polling adapter, then optionally reuse the same
-  encrypted protocol over BLE/Wi-Fi.
-- Before any production release, enable Secure Boot v2 plus release-mode Flash/NVS
-  encryption and run a separate, reviewed eFuse procedure for USB/Pad JTAG and ROM
-  download restrictions. Development boards must use a separate reversible profile;
-  the application-level USB protocol alone is not a hardware security boundary.
-- Add provider/model/key, assistant image, prompt, and simulation/debug write DTOs
-  on top of the same transaction and authorization boundary.
+Implementation is intentionally paused at the first usable physical-management
+vertical slice. Estimated completion is approximately 40% of the full operator
+experience and 75-80% of the shared security, transport, and configuration foundation.
+
+The implemented scope pending repeatable physical acceptance is:
+
+- Select the ESP32-S3 through Chromium Web Serial.
+- Open a local pairing window with three short BOOT presses, display an eight-digit
+  one-time code, and establish a confirmed encrypted ECJPAKE/AES-GCM session.
+- Read `device.status.get` and `config.public.get` through the authenticated channel.
+- Read and update Wi-Fi SSID/password state through `wifi.update`, including revision
+  conflict handling, asynchronous operation polling, trial connection, activation,
+  rollback, and recovery-required quarantine.
+- Exercise the same status and Wi-Fi surfaces through `SimulatedDeviceTransport`.
+
+The following user-visible capabilities are not implemented yet:
+
+- Provider, chat/ASR/TTS model, TTS voice, reasoning, and token-setting writes.
+- Write-only API-key replace/clear operations.
+- Management UI writes for the persisted language and assistant-profile preferences.
+  Voice commands already persist these preferences on the device.
+- Custom Prompt storage, validation, reset-to-default behavior, and runtime use.
+- Animal-image selection. The current pet is compiled into the firmware and cannot
+  be changed by the client.
+- Simulation/debug scenarios beyond the current status and Wi-Fi simulator.
+- Pixel-accurate display mirroring. The client currently renders a logical CSS preview
+  using status text; it does not stream the 466x466 framebuffer.
+- End-to-end browser automation, signed desktop packaging, deployment, and update flow.
+
+Known acceptance and delivery risks at the pause point:
+
+- The client Wi-Fi operation timeout is 60 seconds, equal to the firmware's worst-case
+  candidate-connect plus rollback window. Resume work by adding margin or a durable
+  operation-query/event mechanism before declaring Wi-Fi failure.
+- The connection indicator is derived from transport mode and does not yet transition
+  reliably after physical disconnect or secure-session expiry.
+- `contracts/device-management.schema.json` does not yet describe the full public
+  configuration response and must be brought back in sync before adding write DTOs.
+- Unit and host coverage is strong, but the physical pairing/status/Wi-Fi flow still
+  requires a repeatable real-device acceptance suite.
+- A successful dependency audit is still required before a release; an interrupted or
+  malformed registry response is not evidence that dependencies are vulnerability-free.
+- Production release still requires Secure Boot v2, Flash/NVS encryption, signed images,
+  and a separately reviewed eFuse procedure. Development hardware must retain a
+  reversible profile.
+
+Resume in this order:
+
+1. Close the current physical acceptance slice: disconnect/reconnect lifecycle, Wi-Fi
+   timeout margin, successful update, failed-password rollback, and revision conflict
+   tests (estimated 2-4 person-days).
+2. Add a general atomic configuration update contract for provider/model/voice/options
+   and write-only chat/ASR keys, then implement the client forms (7-12 person-days).
+3. Add profile/language management UI and Prompt configuration with explicit
+   append-versus-replace semantics and reset-to-default behavior (5-8 person-days).
+4. Add selection among firmware-bundled pet designs (4-7 person-days). Arbitrary image
+   upload is a separate feature requiring chunked transfer, validation, dual-slot Flash,
+   integrity checks, rollback, and expression compatibility.
+5. Expand simulation/debug, add browser and physical-device E2E coverage, update docs,
+   and finish the selected browser or desktop delivery path (7-14 person-days).
+
+For a browser client with firmware-bundled pet selection, the remaining MVP is estimated
+at 25-35 person-days when phase 5 is limited to the minimum E2E and browser-delivery
+slice. Completing every phase 5 item raises the estimate to 25-45 person-days. Arbitrary
+image upload, framebuffer mirroring, signed desktop packaging, and production hardware
+security increase the remaining scope to roughly 40-60 person-days.
+
+Quality baseline recorded at this checkpoint:
+
+- Host/firmware tests: 162 passed.
+- Client tests: 69 passed across 11 files.
+- Client coverage: 95.05% lines and 81.73% branches.
+- Client production build and ESP-IDF firmware build: passed.
+
+Hardware state recorded at this checkpoint:
+
+- The blank-screen root cause was confirmed through JTAG as an `aiqa_state` task stack
+  overflow. A 4 KiB stack failed, an 8 KiB stack still failed, and the current 12 KiB
+  stack was verified with the LCD ready and all runtime tasks alive.
+- The finalized original blue pet design is compiled into the C sprite renderer and
+  has been flashed to the development device. It is not yet a client-selectable asset.
+- The verified development device uses ESP32-S3 native USB Serial/JTAG at
+  `/dev/cu.usbmodem1101`. Browser serial code must release DTR/RTS to their safe idle
+  state so a management connection does not leave the device in ROM download mode.
 
 ## Current Chat Scope
 
@@ -281,8 +344,10 @@ Implemented:
 - Chat prompt queue accepts text derived from the latest ASR transcript.
 - Voice language switch commands are handled locally from ASR transcripts:
   phrases such as `使用中文与我交流` or `please speak English with me` switch
-  between Chinese and English, play a local confirmation, and pass `zh`/`en`
-  response-language hints into later chat requests.
+  between Chinese and English, persist the preference in NVS, play a local
+  confirmation, and pass `zh`/`en` response-language hints into later chat requests.
+- Assistant name and gender commands persist a validated profile in NVS. The
+  profile is injected as a dedicated system context, separate from recent dialogue.
 - Short-term conversation memory keeps the latest 3 successful user/pet turns
   in RAM and injects them as chat context before the next user message.
 - State machine accepts chat start from `IDLE` and `IDLE_WITH_RESULT`.
@@ -295,19 +360,17 @@ Implemented:
 
 Not yet implemented:
 
-- Streaming chat token display.
-- Device-side verified live Qwen call with provisioned Wi-Fi/API credentials.
+- Repeatable real-device acceptance for live provider calls across every supported
+  provider/model combination.
 
 ## Current Pet UI Scope
 
 Implemented:
 
-- Centered Codex-inspired 24x24 procedural pixel pet sprite abstraction.
+- Centered 160x160 RGB565 procedural C sprite for the original blue pet design, with
+  asymmetric ears, layered blue fur, a striped tail, and a coral star-shaped tail tip.
 - Circular-safe sprite layout contract for the 1.75C round AMOLED safe area.
-- Multi-frame pet animation for idle, listening, thinking, speaking, and
-  emotion states.
-- Scene/emotion mapping for happy, sad, shy, frustrated, bouncing, laughing,
-  crying, curious, worried, and sleepy expressions.
+- Multi-frame pet animation and scene mapping across all 14 supported expressions.
 - Runtime UI redraw ticker refreshes only the pet sprite region while waiting
   in a stable state, keeping audio/chat tasks ahead of LCD animation work.
 - Dialogue view keeps a compact pet emotion hint from raw Chinese or English
@@ -333,6 +396,9 @@ Implemented:
 - PSRAM-backed PCM recording buffer for 24 kHz/16-bit/mono audio.
 - Runtime PCM diagnostics: captured bytes, mono sample count, PCM bytes, and peak level.
 - Recorded PCM handoff to ASR as a WAV data URI after PTT release.
+- The ASR task reserves 16 KiB of stack, keeps its PCM/Base64 request workspace
+  on the heap, and securely drains queued PCM when a newer interaction cancels
+  pending transcription.
 - Startup ES8311+PA playback self-test tone after Wi-Fi reaches `IDLE`.
 - Startup online Qwen-TTS self-test is skipped so the first user interaction
   does not wait behind a synthetic speech request.
@@ -405,8 +471,9 @@ Implemented:
 
 Not yet implemented:
 
-- Streaming token-by-token answer display.
-- Rendering answer text on the circular screen.
+- Full Unicode/multiline answer rendering and pagination on the circular screen;
+  the current streaming path redraws a compact `OUT` dialogue view.
+- Repeatable real-device soak of the complete PTT -> ASR -> streamed chat -> TTS path.
 
 ## Current MiniMax Scope
 
@@ -435,20 +502,23 @@ Implemented:
   - maximum consecutive provider failures
   - transcript and answer redaction defaults
 - Host contract tests verify heap gating and cooldown calculations.
+- ASR checks both total internal heap and the largest contiguous internal block
+  before opening HTTP/TLS, returning a recoverable failure when memory is low.
 - Captured ES7210 PCM is wrapped as an in-memory WAV for ASR.
 - Chat streaming now parses SSE `delta.content` chunks and redraws the pet
   dialogue page while the model is still answering.
 
 Not yet implemented:
 
-- Runtime heap gate enforcement before each ASR/chat HTTP request.
+- Runtime heap gate enforcement before chat HTTP requests.
 - Runtime cooldown persistence across reboot.
 - Long-running on-device soak with Wi-Fi and provider APIs.
 
-Not yet implemented:
+Hardware and release security not yet implemented:
 
-- AXP2101 register reads / PWR event decoding.
-- ES8311 playback and PA pop suppression sequence.
+- Production PWR-button event decoding and PMU policy beyond the current AXP2101
+  status reads.
+- Production ES8311/PA pop-suppression tuning and long-running playback validation.
 - Production secret hardening with ESP-IDF NVS encryption:
   - flash encryption plus `nvs_keys`, or
   - HMAC eFuse key derivation.

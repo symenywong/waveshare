@@ -74,8 +74,46 @@ class ConfigTransactionTests(unittest.TestCase):
     def test_candidate_cleanup_failure_is_reported_and_latched(self):
         self.run_case("cleanup_failure")
 
+    def test_retired_slot_cleanup_failure_is_reported_and_latched(self):
+        self.run_case("retired_slot_cleanup_failure")
+
     def test_public_api_rejects_invalid_state_and_names_all_statuses(self):
         self.run_case("api_edges")
+
+    def test_nvs_retired_slot_cleanup_commits_and_migration_erases_legacy(self):
+        source = (
+            REPO_ROOT / "components/config_store/src/aiqa_config_nvs_ab.c"
+        ).read_text()
+
+        migration = source[
+            source.index("if (activation == AIQA_CONFIG_ACTIVATION_COMMITTED)") :
+            source.index("aiqa_config_record_secure_clear(&migrated);")
+        ]
+        normalized_migration = " ".join(migration.split())
+        self.assertIn(
+            "aiqa_config_nvs_discard_record( AIQA_CONFIG_SLOT_LEGACY)",
+            normalized_migration,
+        )
+        self.assertGreaterEqual(
+            source.count("aiqa_config_nvs_discard_record(AIQA_CONFIG_SLOT_LEGACY)"),
+            1,
+        )
+        self.assertGreaterEqual(source.count("AIQA_CONFIG_SLOT_LEGACY))"), 2)
+        discard = source[source.index("bool aiqa_config_nvs_discard_record") :]
+        self.assertIn("ret = nvs_commit(handle);", discard)
+        self.assertNotIn("(void)nvs_commit(handle);", discard)
+        legacy_source = (
+            REPO_ROOT / "components/config_store/src/aiqa_config_nvs.c"
+        ).read_text()
+        legacy_cleanup = legacy_source[
+            legacy_source.index("aiqa_config_erase_legacy_record_from_nvs") :
+            legacy_source.index("aiqa_config_load_legacy_prefs_from_nvs")
+        ]
+        for key in ("wifi_ssid", "wifi_pass", "chat_key", "asr_key"):
+            self.assertIn(f'"{key}"', legacy_cleanup)
+        self.assertIn("nvs_commit(handle)", legacy_cleanup)
+        self.assertIn("nvs_get_str(handle, secret_keys[index]", legacy_cleanup)
+        self.assertIn("if (ret == ESP_OK && changed)", legacy_cleanup)
 
 
 if __name__ == "__main__":

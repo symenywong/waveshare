@@ -30,6 +30,16 @@ typedef struct {
     bool overflow;
 } aiqa_asr_response_buffer_t;
 
+typedef struct {
+    uint8_t wav_header[AIQA_ASR_WAV_HEADER_BYTES];
+    char endpoint_url[AIQA_ASR_ENDPOINT_MAX_LEN];
+    char prefix[AIQA_ASR_REQUEST_PART_MAX_LEN];
+    char suffix[AIQA_ASR_REQUEST_PART_MAX_LEN];
+    char auth_header[AIQA_MAX_API_KEY_LEN + 8];
+    uint8_t raw_chunk[AIQA_ASR_BASE64_RAW_CHUNK_BYTES];
+    unsigned char encoded_chunk[AIQA_ASR_BASE64_ENCODED_CHUNK_BYTES];
+} aiqa_asr_pcm_workspace_t;
+
 static SemaphoreHandle_t active_client_mutex(void)
 {
     if (s_active_client_mutex == NULL) {
@@ -85,6 +95,15 @@ static void secure_zero(void *data, size_t length)
         *cursor++ = 0;
         --length;
     }
+}
+
+static void free_pcm_workspace(aiqa_asr_pcm_workspace_t *workspace)
+{
+    if (workspace == NULL) {
+        return;
+    }
+    secure_zero(workspace, sizeof(*workspace));
+    free(workspace);
 }
 
 static esp_err_t asr_http_event_handler(esp_http_client_event_t *event)
@@ -386,81 +405,97 @@ esp_err_t aiqa_asr_transcribe_pcm_wav_once(
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint8_t wav_header[AIQA_ASR_WAV_HEADER_BYTES] = {0};
+    aiqa_asr_pcm_workspace_t *workspace =
+        (aiqa_asr_pcm_workspace_t *)calloc(1, sizeof(*workspace));
+    if (workspace == NULL) {
+        result->status = AIQA_ASR_ERR_PROVIDER;
+        return ESP_ERR_NO_MEM;
+    }
+
     asr_status = aiqa_asr_write_wav_header(
-        wav_header,
+        workspace->wav_header,
         audio->sample_rate_hz,
         audio->bits_per_sample,
         audio->channels,
         audio->pcm_bytes);
     if (asr_status != AIQA_ASR_OK) {
+        free_pcm_workspace(workspace);
         result->status = asr_status;
         return ESP_ERR_INVALID_ARG;
     }
 
-    char endpoint_url[AIQA_ASR_ENDPOINT_MAX_LEN] = {0};
-    asr_status = aiqa_asr_build_endpoint_url(config->asr_base_url, endpoint_url, sizeof(endpoint_url));
+    asr_status = aiqa_asr_build_endpoint_url(
+        config->asr_base_url,
+        workspace->endpoint_url,
+        sizeof(workspace->endpoint_url));
     if (asr_status != AIQA_ASR_OK) {
-        secure_zero(wav_header, sizeof(wav_header));
+        free_pcm_workspace(workspace);
         result->status = asr_status;
         return ESP_ERR_INVALID_ARG;
     }
 
-    char prefix[AIQA_ASR_REQUEST_PART_MAX_LEN] = {0};
-    char suffix[AIQA_ASR_REQUEST_PART_MAX_LEN] = {0};
-    asr_status = aiqa_asr_build_data_uri_request_prefix_json(config, prefix, sizeof(prefix));
+    asr_status = aiqa_asr_build_data_uri_request_prefix_json(
+        config,
+        workspace->prefix,
+        sizeof(workspace->prefix));
     if (asr_status == AIQA_ASR_OK) {
-        asr_status = aiqa_asr_build_request_suffix_json(&options, suffix, sizeof(suffix));
+        asr_status = aiqa_asr_build_request_suffix_json(
+            &options,
+            workspace->suffix,
+            sizeof(workspace->suffix));
     }
     const size_t encoded_len = aiqa_asr_base64_encoded_len(wav_bytes);
     if (asr_status != AIQA_ASR_OK || encoded_len == 0) {
-        secure_zero(wav_header, sizeof(wav_header));
+        free_pcm_workspace(workspace);
         result->status = asr_status != AIQA_ASR_OK ? asr_status : AIQA_ASR_ERR_BUFFER_TOO_SMALL;
         return ESP_ERR_INVALID_ARG;
     }
-    const size_t post_len = strlen(prefix) + encoded_len + 1u + strlen(suffix);
+    const size_t post_len =
+        strlen(workspace->prefix) + encoded_len + 1u + strlen(workspace->suffix);
     if (post_len > (size_t)INT_MAX) {
-        secure_zero(wav_header, sizeof(wav_header));
+        free_pcm_workspace(workspace);
         result->status = AIQA_ASR_ERR_BUFFER_TOO_SMALL;
         return ESP_ERR_INVALID_ARG;
     }
 
     char *response_body = (char *)malloc(AIQA_ASR_HTTP_RESPONSE_MAX_LEN);
     if (response_body == NULL) {
-        secure_zero(wav_header, sizeof(wav_header));
+        free_pcm_workspace(workspace);
         result->status = AIQA_ASR_ERR_PROVIDER;
         return ESP_ERR_NO_MEM;
     }
     response_body[0] = '\0';
 
     esp_http_client_config_t http_config = {
-        .url = endpoint_url,
+        .url = workspace->endpoint_url,
         .method = HTTP_METHOD_POST,
         .timeout_ms = AIQA_ASR_DEFAULT_TIMEOUT_MS,
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
     esp_http_client_handle_t client = esp_http_client_init(&http_config);
     if (client == NULL) {
-        secure_zero(wav_header, sizeof(wav_header));
+        free_pcm_workspace(workspace);
         secure_zero(response_body, AIQA_ASR_HTTP_RESPONSE_MAX_LEN);
         free(response_body);
         result->status = AIQA_ASR_ERR_PROVIDER;
         return ESP_ERR_NO_MEM;
     }
 
-    char auth_header[AIQA_MAX_API_KEY_LEN + 8] = {0};
-    int written = snprintf(auth_header, sizeof(auth_header), "Bearer %s", api_key);
-    if (written < 0 || (size_t)written >= sizeof(auth_header)) {
+    int written = snprintf(
+        workspace->auth_header,
+        sizeof(workspace->auth_header),
+        "Bearer %s",
+        api_key);
+    if (written < 0 || (size_t)written >= sizeof(workspace->auth_header)) {
         (void)esp_http_client_cleanup(client);
-        secure_zero(auth_header, sizeof(auth_header));
-        secure_zero(wav_header, sizeof(wav_header));
+        free_pcm_workspace(workspace);
         secure_zero(response_body, AIQA_ASR_HTTP_RESPONSE_MAX_LEN);
         free(response_body);
         result->status = AIQA_ASR_ERR_AUTH;
         return ESP_ERR_INVALID_ARG;
     }
 
-    esp_err_t ret = set_common_headers(client, auth_header);
+    esp_err_t ret = set_common_headers(client, workspace->auth_header);
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Sending ASR WAV request: pcm_bytes=%u wav_bytes=%u",
                  (unsigned)audio->pcm_bytes,
@@ -469,40 +504,43 @@ esp_err_t aiqa_asr_transcribe_pcm_wav_once(
         ret = esp_http_client_open(client, (int)post_len);
     }
     if (ret == ESP_OK) {
-        ret = write_all(client, prefix, strlen(prefix));
+        ret = write_all(client, workspace->prefix, strlen(workspace->prefix));
     }
 
-    uint8_t raw_chunk[AIQA_ASR_BASE64_RAW_CHUNK_BYTES] = {0};
-    unsigned char encoded_chunk[AIQA_ASR_BASE64_ENCODED_CHUNK_BYTES] = {0};
     size_t wav_offset = 0;
     while (ret == ESP_OK && wav_offset < wav_bytes) {
         size_t raw_len = wav_bytes - wav_offset;
         if (raw_len > AIQA_ASR_BASE64_RAW_CHUNK_BYTES) {
             raw_len = AIQA_ASR_BASE64_RAW_CHUNK_BYTES;
         }
-        copy_wav_virtual_chunk(wav_header, audio->pcm, wav_offset, raw_chunk, raw_len);
+        copy_wav_virtual_chunk(
+            workspace->wav_header,
+            audio->pcm,
+            wav_offset,
+            workspace->raw_chunk,
+            raw_len);
         size_t out_len = 0;
         const int b64_ret = esp_crypto_base64_encode(
-            encoded_chunk,
-            sizeof(encoded_chunk),
+            workspace->encoded_chunk,
+            sizeof(workspace->encoded_chunk),
             &out_len,
-            raw_chunk,
+            workspace->raw_chunk,
             raw_len);
-        secure_zero(raw_chunk, sizeof(raw_chunk));
-        if (b64_ret != 0 || out_len == 0 || out_len > sizeof(encoded_chunk)) {
+        secure_zero(workspace->raw_chunk, sizeof(workspace->raw_chunk));
+        if (b64_ret != 0 || out_len == 0 || out_len > sizeof(workspace->encoded_chunk)) {
             ret = ESP_FAIL;
             result->status = AIQA_ASR_ERR_PROVIDER;
             break;
         }
-        ret = write_all(client, (const char *)encoded_chunk, out_len);
-        secure_zero(encoded_chunk, sizeof(encoded_chunk));
+        ret = write_all(client, (const char *)workspace->encoded_chunk, out_len);
+        secure_zero(workspace->encoded_chunk, sizeof(workspace->encoded_chunk));
         wav_offset += raw_len;
     }
     if (ret == ESP_OK) {
         ret = write_all(client, "\"", 1);
     }
     if (ret == ESP_OK) {
-        ret = write_all(client, suffix, strlen(suffix));
+        ret = write_all(client, workspace->suffix, strlen(workspace->suffix));
     }
 
     if (ret == ESP_OK) {
@@ -520,12 +558,7 @@ esp_err_t aiqa_asr_transcribe_pcm_wav_once(
     set_active_client(NULL);
     (void)esp_http_client_close(client);
     (void)esp_http_client_cleanup(client);
-    secure_zero(auth_header, sizeof(auth_header));
-    secure_zero(wav_header, sizeof(wav_header));
-    secure_zero(raw_chunk, sizeof(raw_chunk));
-    secure_zero(encoded_chunk, sizeof(encoded_chunk));
-    secure_zero(prefix, sizeof(prefix));
-    secure_zero(suffix, sizeof(suffix));
+    free_pcm_workspace(workspace);
     secure_zero(response_body, AIQA_ASR_HTTP_RESPONSE_MAX_LEN);
     free(response_body);
     return ret == ESP_OK ? ESP_OK : ret;

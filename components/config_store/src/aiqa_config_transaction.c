@@ -280,10 +280,15 @@ aiqa_config_transaction_status_t aiqa_config_transaction_apply_wifi(
         goto done;
     }
 
+    const aiqa_config_slot_t retired_slot = impl->active.active_slot;
     impl->active = candidate;
     if (out_view != NULL) {
         (void)aiqa_config_build_public_wifi_view(
             &impl->active.secrets, impl->active.revision, out_view);
+    }
+    if (!storage->discard(storage->context, retired_slot)) {
+        impl->recovery_required = true;
+        result = AIQA_CONFIG_TRANSACTION_ERR_RETIRED_SLOT_CLEANUP_FAILED;
     }
 
 done:
@@ -341,6 +346,8 @@ const char *aiqa_config_transaction_status_name(aiqa_config_transaction_status_t
         return "ACTIVATION_INDETERMINATE";
     case AIQA_CONFIG_TRANSACTION_ERR_CANDIDATE_CLEANUP_FAILED:
         return "CANDIDATE_CLEANUP_FAILED";
+    case AIQA_CONFIG_TRANSACTION_ERR_RETIRED_SLOT_CLEANUP_FAILED:
+        return "RETIRED_SLOT_CLEANUP_FAILED";
     case AIQA_CONFIG_TRANSACTION_ERR_RECOVERY_REQUIRED:
         return "RECOVERY_REQUIRED";
     default:

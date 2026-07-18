@@ -258,6 +258,13 @@ aiqa_secret_status_t aiqa_secret_config_validate(const aiqa_secret_config_t *sec
         return AIQA_SECRET_ERR_CHAT_API_KEY;
     }
 
+    const size_t asr_key_len =
+        bounded_strlen(secrets->asr_api_key, sizeof(secrets->asr_api_key));
+    if (secrets->asr_api_key[0] != '\0' &&
+        (asr_key_len < 6 || asr_key_len >= sizeof(secrets->asr_api_key))) {
+        return AIQA_SECRET_ERR_CHAT_API_KEY;
+    }
+
     return AIQA_SECRET_OK;
 }
 

@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { ManagementFrameDecoder, encodeManagementFrame } from './serialFrameCodec'
 
 export interface SerialReader {
-  read(): Promise<ReadableStreamReadResult<Uint8Array>>
+  read(): Promise<{ readonly done: boolean; readonly value?: Uint8Array }>
   cancel(): Promise<void>
   releaseLock(): void
 }
@@ -18,6 +18,10 @@ export interface SerialPort {
   readonly readable: { getReader(): SerialReader } | null
   readonly writable: { getWriter(): SerialWriter } | null
   open(options: { readonly baudRate: number }): Promise<void>
+  setSignals?(signals: {
+    readonly dataTerminalReady: boolean
+    readonly requestToSend: boolean
+  }): Promise<void>
   close(): Promise<void>
 }
 
@@ -51,8 +55,16 @@ const helloEnvelopeSchema = z
 const encoder = new TextEncoder()
 const decoder = new TextDecoder('utf-8', { fatal: true })
 const CLEANUP_TIMEOUT_MS = 250
+const SERIAL_IDLE_SIGNALS = Object.freeze({
+  dataTerminalReady: false,
+  requestToSend: false,
+})
 
 class HelloTimeoutError extends Error {}
+
+export async function setSerialPortIdle(port: SerialPort): Promise<void> {
+  await port.setSignals?.(SERIAL_IDLE_SIGNALS)
+}
 
 function parseHello(payload: Uint8Array): SerialHello {
   try {
@@ -148,12 +160,14 @@ export class SerialHelloClient {
       }
       await boundedBestEffort(() => reader?.releaseLock())
       await boundedBestEffort(() => writer?.releaseLock())
+      await boundedBestEffort(() => setSerialPortIdle(port))
       await boundedBestEffort(() => port.close())
     }
 
     try {
       const handshake = (async () => {
         await port.open({ baudRate: 115200 })
+        await setSerialPortIdle(port)
         if (abandoned) throw new HelloTimeoutError()
         if (port.readable === null || port.writable === null) {
           throw new Error('设备 handshake streams unavailable')

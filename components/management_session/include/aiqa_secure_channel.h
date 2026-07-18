@@ -38,6 +38,9 @@ aiqa_pairing_result_t aiqa_secure_channel_decrypt(
     aiqa_secure_channel_t *channel, uint8_t outer_frame_kind,
     const uint8_t *record, size_t record_length, uint8_t *plaintext,
     size_t plaintext_capacity, size_t *out_plaintext_length);
+aiqa_pairing_result_t aiqa_secure_channel_copy_session_id(
+    const aiqa_secure_channel_t *channel,
+    uint8_t output[AIQA_PAIRING_SESSION_ID_SIZE]);
 void aiqa_secure_channel_destroy(aiqa_secure_channel_t **channel);
 
 #ifdef __cplusplus

@@ -89,7 +89,7 @@ static const char *ui_status_for(aiqa_state_t state, aiqa_error_code_t error)
         return "LISTEN";
     case AIQA_STATE_TRANSCRIBING:
     case AIQA_STATE_ASR_JOB_PENDING:
-        return "TEXT";
+        return "ASR";
     case AIQA_STATE_THINKING:
         return "THINK";
     case AIQA_STATE_ERROR:
@@ -144,7 +144,7 @@ static const char *ui_detail_for(aiqa_state_t state, aiqa_error_code_t error)
         return "IN VOICE";
     case AIQA_STATE_TRANSCRIBING:
     case AIQA_STATE_ASR_JOB_PENDING:
-        return "IN TEXT";
+        return "TO TEXT";
     case AIQA_STATE_THINKING:
         return "OUT WAIT";
     case AIQA_STATE_IDLE_WITH_RESULT:
@@ -253,6 +253,7 @@ static board_wave_175c_pet_expression_t ui_expression_for(aiqa_state_t state, ai
         return BOARD_WAVE_175C_PET_EXPRESSION_LISTENING;
     case AIQA_STATE_TRANSCRIBING:
     case AIQA_STATE_ASR_JOB_PENDING:
+        return BOARD_WAVE_175C_PET_EXPRESSION_LISTENING;
     case AIQA_STATE_THINKING:
         return BOARD_WAVE_175C_PET_EXPRESSION_THINKING;
     case AIQA_STATE_IDLE_WITH_RESULT:

@@ -116,7 +116,8 @@ static aiqa_chat_status_t append_conversation_context_message(
         return AIQA_CHAT_OK;
     }
 
-    aiqa_chat_status_t status = append_raw(out, out_size, pos, "},{\"role\":\"system\",\"content\":");
+    /* Profile and memory originate from speech and must never gain system priority. */
+    aiqa_chat_status_t status = append_raw(out, out_size, pos, "},{\"role\":\"user\",\"content\":");
     if (status != AIQA_CHAT_OK) {
         return status;
     }

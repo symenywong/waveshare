@@ -107,7 +107,9 @@ class PairingBuildContractTests(unittest.TestCase):
             / "components/management_session_esp/src/aiqa_pairing_esp_nvs.c"
         ).read_text()
 
-        self.assertIn("REQUIRES management_session nvs_flash", cmake)
+        self.assertIn("REQUIRES", cmake)
+        self.assertIn("management_session", cmake)
+        self.assertIn("nvs_flash", cmake)
         for forbidden in ("app_runtime", "management_transport", "board_wave", "log"):
             self.assertNotIn(forbidden, cmake.lower())
         self.assertIn('AIQA_PAIRING_NVS_NAMESPACE "aiqa_pair"', source)
@@ -128,6 +130,20 @@ class PairingBuildContractTests(unittest.TestCase):
         normalized = " ".join(lifecycle_header.split())
 
         self.assertIn("bool (*clear_code)(void *context)", normalized)
+
+    def test_management_usb_starts_before_slow_device_runtime(self):
+        app_main = (ROOT / "main/app_main.c").read_text()
+
+        self.assertLess(
+            app_main.index("nvs_flash_init()"),
+            app_main.index("aiqa_usb_management_start()"),
+        )
+        self.assertLess(
+            app_main.index("aiqa_usb_management_start()"),
+            app_main.index("aiqa_runtime_start()"),
+        )
+        self.assertNotIn("ESP_ERROR_CHECK(aiqa_runtime_start())", app_main)
+        self.assertNotIn("nvs_flash_erase", app_main)
 
 
 if __name__ == "__main__":

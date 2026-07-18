@@ -1,4 +1,5 @@
 build/
+build-release/
 managed_components/
 sdkconfig
 sdkconfig.old
@@ -14,4 +15,5 @@ config.local.json
 client/node_modules/
 client/dist/
 client/coverage/
+client/.wasm-build/
 client/*.tsbuildinfo

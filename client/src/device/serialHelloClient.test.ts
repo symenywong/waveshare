@@ -35,6 +35,7 @@ function makePort(responseChunks: readonly Uint8Array[]) {
   }
   const port: SerialPort = {
     open: vi.fn(async () => undefined),
+    setSignals: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
     readable: { getReader: () => reader },
     writable: { getWriter: () => writer },
@@ -87,6 +88,11 @@ describe('SerialHelloClient', () => {
 
     expect(hello.authentication).toBe('authentication_required')
     expect(fixture.port.open).toHaveBeenCalledWith({ baudRate: 115200 })
+    expect(fixture.port.setSignals).toHaveBeenCalledTimes(2)
+    expect(fixture.port.setSignals).toHaveBeenLastCalledWith({
+      dataTerminalReady: false,
+      requestToSend: false,
+    })
     expect(fixture.port.close).toHaveBeenCalledOnce()
     expect(fixture.reader.releaseLock).toHaveBeenCalledOnce()
     expect(fixture.writer.releaseLock).toHaveBeenCalledOnce()
@@ -154,6 +160,7 @@ describe('SerialHelloClient', () => {
   it('closes a port that does not expose readable and writable streams', async () => {
     const port: SerialPort = {
       open: vi.fn(async () => undefined),
+      setSignals: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
       readable: null,
       writable: null,
@@ -163,6 +170,7 @@ describe('SerialHelloClient', () => {
     await expect(new SerialHelloClient(serial).connectAndHello()).rejects.toThrow(
       '设备握手失败',
     )
+    expect(port.setSignals).toHaveBeenCalledTimes(2)
     expect(port.close).toHaveBeenCalledOnce()
   })
 

@@ -1,4 +1,5 @@
 #include "aiqa_config_nvs.h"
+#include "aiqa_config_transaction_internal.h"
 #include "aiqa_config_transaction.h"
 #include "fake_nvs.h"
 #include "nvs.h"
@@ -50,7 +51,7 @@ static void provision_legacy(const aiqa_config_record_t *record)
     set_string(handle, "asr_key", record->secrets.asr_api_key);
     assert(nvs_set_u8(handle, "volume", 37) == ESP_OK);
     set_string(handle, "assistant_name", "Mochi");
-    set_string(handle, "assistant_gender", "female");
+    set_string(handle, "assist_gender", "female");
     assert(nvs_commit(handle) == ESP_OK);
     nvs_close(handle);
 }
@@ -94,6 +95,13 @@ static void run_legacy(void)
     assert_same_record(&loaded, &migrated);
     assert(fake_nvs_namespace_has_key("aiqa_cfg_a", "layout"));
     assert(fake_nvs_namespace_has_key("aiqa_meta", "head"));
+    assert(!fake_nvs_namespace_has_key("aiqa", "wifi_ssid"));
+    assert(!fake_nvs_namespace_has_key("aiqa", "wifi_pass"));
+    assert(!fake_nvs_namespace_has_key("aiqa", "chat_key"));
+    assert(!fake_nvs_namespace_has_key("aiqa", "asr_key"));
+    assert(fake_nvs_namespace_has_key("aiqa", "volume"));
+    assert(fake_nvs_namespace_has_key("aiqa", "assistant_name"));
+    assert(fake_nvs_namespace_has_key("aiqa", "assist_gender"));
 
     aiqa_config_snapshot_t snapshot;
     assert(aiqa_config_load_from_nvs(&snapshot) == ESP_OK);
@@ -429,6 +437,118 @@ static void run_migration_activation_not_committed(void)
     assert(strcmp(loaded.secrets.wifi_ssid, "legacy-retry") == 0);
 }
 
+static void run_migration_cleanup_retry(void)
+{
+    fake_nvs_reset();
+    aiqa_config_record_t legacy =
+        make_record(1, AIQA_CONFIG_SLOT_LEGACY, "legacy-cleanup-retry");
+    provision_legacy(&legacy);
+    fake_nvs_set_commit_mode_after(2, FAKE_NVS_COMMIT_NOT_APPLIED_ERROR);
+
+    aiqa_config_record_t loaded = {0};
+    bool found = true;
+    assert(aiqa_config_nvs_load_active_record(&loaded, &found) ==
+           ESP_ERR_INVALID_STATE);
+    assert(!found);
+    assert(loaded.secrets.wifi_ssid[0] == '\0');
+    assert(fake_nvs_namespace_has_key("aiqa_meta", "head"));
+    assert(fake_nvs_namespace_has_key("aiqa", "wifi_pass"));
+    fake_nvs_power_cut();
+
+    loaded = load_active();
+    assert(loaded.active_slot == AIQA_CONFIG_SLOT_A);
+    assert(strcmp(loaded.secrets.wifi_ssid, "legacy-cleanup-retry") == 0);
+    assert(!fake_nvs_namespace_has_key("aiqa", "wifi_ssid"));
+    assert(!fake_nvs_namespace_has_key("aiqa", "wifi_pass"));
+    assert(!fake_nvs_namespace_has_key("aiqa", "chat_key"));
+    assert(!fake_nvs_namespace_has_key("aiqa", "asr_key"));
+    assert(fake_nvs_namespace_has_key("aiqa", "volume"));
+    assert(fake_nvs_namespace_has_key("aiqa", "assistant_name"));
+}
+
+static void run_user_prefs_round_trip(void)
+{
+    fake_nvs_reset();
+    aiqa_config_record_t record = make_record(1, AIQA_CONFIG_SLOT_A, "prefs-wifi");
+    stage_and_activate(&record, AIQA_CONFIG_SLOT_LEGACY, 1);
+
+    aiqa_config_snapshot_t snapshot = {0};
+    assert(aiqa_config_load_from_nvs(&snapshot) == ESP_OK);
+    assert(snapshot.user_prefs.dialogue_language == AIQA_DIALOGUE_LANGUAGE_CHINESE);
+    assert(aiqa_config_save_dialogue_language((aiqa_dialogue_language_t)99) ==
+           ESP_ERR_INVALID_ARG);
+
+    nvs_handle_t handle = 0;
+    assert(nvs_open("aiqa", NVS_READWRITE, &handle) == ESP_OK);
+    set_string(handle, "dialogue_lang", "invalid");
+    assert(nvs_commit(handle) == ESP_OK);
+    nvs_close(handle);
+    fake_nvs_power_cut();
+    assert(aiqa_config_load_from_nvs(&snapshot) == ESP_OK);
+    assert(snapshot.user_prefs.dialogue_language == AIQA_DIALOGUE_LANGUAGE_CHINESE);
+
+    assert(nvs_open("aiqa", NVS_READWRITE, &handle) == ESP_OK);
+    set_string(handle, "dialogue_lang", "future-language-code");
+    assert(nvs_commit(handle) == ESP_OK);
+    nvs_close(handle);
+    fake_nvs_power_cut();
+    assert(aiqa_config_load_from_nvs(&snapshot) == ESP_OK);
+    assert(snapshot.user_prefs.dialogue_language == AIQA_DIALOGUE_LANGUAGE_CHINESE);
+
+    assert(nvs_open("aiqa", NVS_READWRITE, &handle) == ESP_OK);
+    assert(nvs_set_u8(handle, "dialogue_lang", 1) == ESP_OK);
+    assert(nvs_commit(handle) == ESP_OK);
+    nvs_close(handle);
+    fake_nvs_power_cut();
+    assert(aiqa_config_load_from_nvs(&snapshot) == ESP_OK);
+    assert(snapshot.user_prefs.dialogue_language == AIQA_DIALOGUE_LANGUAGE_CHINESE);
+
+    aiqa_assistant_profile_t profile = aiqa_assistant_profile_default();
+    assert(aiqa_assistant_profile_set_name(&profile, "小皮"));
+    assert(aiqa_assistant_profile_set_gender(&profile, AIQA_ASSISTANT_GENDER_MALE));
+    assert(aiqa_config_save_assistant_profile(&profile) == ESP_OK);
+    assert(aiqa_config_save_dialogue_language(AIQA_DIALOGUE_LANGUAGE_ENGLISH) == ESP_OK);
+    fake_nvs_power_cut();
+
+    assert(aiqa_config_load_from_nvs(&snapshot) == ESP_OK);
+    assert(strcmp(snapshot.user_prefs.assistant_profile.name, "小皮") == 0);
+    assert(snapshot.user_prefs.assistant_profile.gender == AIQA_ASSISTANT_GENDER_MALE);
+    assert(snapshot.user_prefs.dialogue_language == AIQA_DIALOGUE_LANGUAGE_ENGLISH);
+
+    assert(aiqa_config_lifecycle_try_lock());
+    assert(aiqa_config_save_dialogue_language(AIQA_DIALOGUE_LANGUAGE_CHINESE) ==
+           ESP_ERR_INVALID_STATE);
+    aiqa_config_lifecycle_unlock();
+
+    profile = snapshot.user_prefs.assistant_profile;
+    assert(aiqa_assistant_profile_set_name(&profile, "未保存"));
+    fake_nvs_set_next_commit_mode(FAKE_NVS_COMMIT_NOT_APPLIED_ERROR);
+    assert(aiqa_config_save_assistant_profile(&profile) != ESP_OK);
+    fake_nvs_power_cut();
+    assert(aiqa_config_load_from_nvs(&snapshot) == ESP_OK);
+    assert(strcmp(snapshot.user_prefs.assistant_profile.name, "小皮") == 0);
+
+    fake_nvs_set_next_commit_mode(FAKE_NVS_COMMIT_NOT_APPLIED_ERROR);
+    assert(aiqa_config_save_dialogue_language(AIQA_DIALOGUE_LANGUAGE_CHINESE) != ESP_OK);
+    fake_nvs_power_cut();
+    assert(aiqa_config_load_from_nvs(&snapshot) == ESP_OK);
+    assert(snapshot.user_prefs.dialogue_language == AIQA_DIALOGUE_LANGUAGE_ENGLISH);
+
+    fake_nvs_set_next_commit_mode(FAKE_NVS_COMMIT_APPLIED_ERROR);
+    assert(aiqa_config_save_dialogue_language(AIQA_DIALOGUE_LANGUAGE_CHINESE) == ESP_OK);
+    fake_nvs_power_cut();
+    assert(aiqa_config_load_from_nvs(&snapshot) == ESP_OK);
+    assert(snapshot.user_prefs.dialogue_language == AIQA_DIALOGUE_LANGUAGE_CHINESE);
+
+    profile = snapshot.user_prefs.assistant_profile;
+    assert(aiqa_assistant_profile_set_name(&profile, "已保存"));
+    fake_nvs_set_next_commit_mode(FAKE_NVS_COMMIT_APPLIED_ERROR);
+    assert(aiqa_config_save_assistant_profile(&profile) == ESP_OK);
+    fake_nvs_power_cut();
+    assert(aiqa_config_load_from_nvs(&snapshot) == ESP_OK);
+    assert(strcmp(snapshot.user_prefs.assistant_profile.name, "已保存") == 0);
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -458,6 +578,10 @@ int main(int argc, char **argv)
         run_missing_head_after_migration();
     } else if (strcmp(argv[1], "migration_activation_not_committed") == 0) {
         run_migration_activation_not_committed();
+    } else if (strcmp(argv[1], "migration_cleanup_retry") == 0) {
+        run_migration_cleanup_retry();
+    } else if (strcmp(argv[1], "user_prefs_round_trip") == 0) {
+        run_user_prefs_round_trip();
     } else {
         return 2;
     }

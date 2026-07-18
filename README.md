@@ -11,7 +11,7 @@ The first implementation stage establishes the safe runtime skeleton:
 - I2C scan and required-device detection for PMU/audio codecs
 - CO5300 AMOLED QSPI bring-up with a circular-safe pet expression page
 - BOOT long-press push-to-talk event source and PA safe-off default
-- bounded 16 kHz/16-bit/mono audio capture budget and recording session lifecycle
+- bounded 24 kHz/16-bit/mono audio capture budget and recording session lifecycle
 - provider capability contracts for Qwen/DashScope and MiniMax
 - secure configuration validation and redaction tooling
 - local tests for provider/config safety rules
@@ -46,7 +46,7 @@ On boot the current firmware prints:
 Local host-side checks:
 
 ```bash
-python3 -m unittest discover -s tests
+python3 -m pytest -q
 ```
 
 The firmware currently stops at `ERROR/CONFIG_MISSING` until the `aiqa` NVS
@@ -55,7 +55,7 @@ screen shows a compact assistant page; without provisioning it should display
 short setup labels such as `PET`, `SETUP`, and `PAIR`.
 Long-pressing BOOT now drives the runtime into the `LISTENING` pet state and
 release moves it toward transcription. The ES7210/I2S capture path starts on
-press, stores 16 kHz/16-bit/mono PCM in PSRAM, stops on release, wraps the
+press, stores 24 kHz/16-bit/mono PCM in PSRAM, stops on release, wraps the
 recording as an in-memory WAV data URI, and sends it to Qwen ASR through the
 OpenAI-compatible `chat/completions` endpoint. Logs include byte/sample/peak
 statistics only; API keys, PCM, base64 audio, transcripts, and answers stay out
@@ -69,6 +69,19 @@ as `SPEAK`.
 Phase 9 adds release-hardening contracts for repeated PTT cycles, minimum heap
 before model requests, provider rate-limit cooldown, and privacy defaults that
 keep transcripts and answers out of logs.
+
+## Device Management Console
+
+The React/Vite console in [`client/`](client/) supports the current physical
+management checkpoint: Chromium Web Serial selection, locally confirmed encrypted
+pairing, authenticated device status/public configuration reads, and transactional
+Wi-Fi SSID/password updates. It also includes a status and Wi-Fi simulator.
+
+Development is intentionally paused before provider/model/key writes, Prompt editing,
+pet selection, advanced simulation/debug, and delivery packaging. See
+[`client/README.md`](client/README.md) for use and acceptance scope, and
+[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for the dated pause
+checkpoint, remaining phases, estimates, and release risks.
 
 ## Configuration
 

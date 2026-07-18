@@ -22,6 +22,7 @@ class ConfigAbNvsTests(unittest.TestCase):
                 "-fsanitize=address,undefined",
                 f"-I{REPO_ROOT / 'tests/fakes'}",
                 f"-I{REPO_ROOT / 'components/config_store/include'}",
+                f"-I{REPO_ROOT / 'components/config_store/src'}",
                 f"-I{REPO_ROOT / 'components/app_core/include'}",
                 f"-I{REPO_ROOT / 'components/provider_common/include'}",
                 str(REPO_ROOT / "tests/c/config_ab_nvs_harness.c"),
@@ -31,6 +32,7 @@ class ConfigAbNvsTests(unittest.TestCase):
                 str(REPO_ROOT / "components/config_store/src/aiqa_config.c"),
                 str(REPO_ROOT / "components/config_store/src/aiqa_config_transaction.c"),
                 str(REPO_ROOT / "components/app_core/src/aiqa_assistant_profile.c"),
+                str(REPO_ROOT / "components/app_core/src/aiqa_language.c"),
                 str(REPO_ROOT / "components/provider_common/src/aiqa_provider.c"),
                 "-o",
                 str(cls.binary),
@@ -84,6 +86,12 @@ class ConfigAbNvsTests(unittest.TestCase):
 
     def test_failed_migration_activation_discards_candidate_and_retries(self):
         self.run_case("migration_activation_not_committed")
+
+    def test_failed_legacy_cleanup_fails_closed_and_retries_after_restart(self):
+        self.run_case("migration_cleanup_retry")
+
+    def test_user_preferences_survive_restart_and_failed_commits_do_not_replace_them(self):
+        self.run_case("user_prefs_round_trip")
 
 
 if __name__ == "__main__":

@@ -83,6 +83,12 @@ aiqa_dialogue_language_t aiqa_language_default(void)
     return AIQA_DIALOGUE_LANGUAGE_CHINESE;
 }
 
+bool aiqa_language_is_valid(aiqa_dialogue_language_t language)
+{
+    return language == AIQA_DIALOGUE_LANGUAGE_ENGLISH ||
+           language == AIQA_DIALOGUE_LANGUAGE_CHINESE;
+}
+
 bool aiqa_language_detect_switch_command(const char *text, aiqa_dialogue_language_t *out_language)
 {
     static const char *const chinese_phrases[] = {
@@ -189,6 +195,24 @@ const char *aiqa_language_chat_code(aiqa_dialogue_language_t language)
     default:
         return "en";
     }
+}
+
+bool aiqa_language_from_chat_code(
+    const char *language_code,
+    aiqa_dialogue_language_t *out_language)
+{
+    if (language_code == NULL || out_language == NULL) {
+        return false;
+    }
+    if (strcmp(language_code, "zh") == 0) {
+        *out_language = AIQA_DIALOGUE_LANGUAGE_CHINESE;
+        return true;
+    }
+    if (strcmp(language_code, "en") == 0) {
+        *out_language = AIQA_DIALOGUE_LANGUAGE_ENGLISH;
+        return true;
+    }
+    return false;
 }
 
 const char *aiqa_language_name(aiqa_dialogue_language_t language)

@@ -2,6 +2,7 @@
 
 #include "aiqa_config.h"
 #include "aiqa_assistant_profile.h"
+#include "aiqa_language.h"
 #include "aiqa_config_transaction.h"
 
 #include "esp_err.h"
@@ -16,6 +17,7 @@ extern "C" {
 typedef struct {
     uint8_t volume_percent;
     aiqa_assistant_profile_t assistant_profile;
+    aiqa_dialogue_language_t dialogue_language;
 } aiqa_user_prefs_t;
 
 typedef struct {
@@ -47,6 +49,7 @@ aiqa_config_storage_ports_t aiqa_config_nvs_storage_ports(void);
 esp_err_t aiqa_config_erase_nvs_namespace(void);
 esp_err_t aiqa_config_save_volume_percent(uint8_t volume_percent);
 esp_err_t aiqa_config_save_assistant_profile(const aiqa_assistant_profile_t *profile);
+esp_err_t aiqa_config_save_dialogue_language(aiqa_dialogue_language_t language);
 
 #ifdef __cplusplus
 }

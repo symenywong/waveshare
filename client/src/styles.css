@@ -53,6 +53,12 @@ button { color: inherit; }
 .runtime-strip strong { font: 13px ui-monospace, monospace; }
 
 .control-panel { min-width: 0; display: grid; grid-template-columns: 108px 1fr; background: rgba(18,22,20,.96); }
+.device-connection { grid-column: 1 / -1; padding: 12px 18px; border-bottom: 1px solid var(--line); background: rgba(133,240,191,.04); }
+.device-connection form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.device-connection span, .device-connection p { margin: 0; color: var(--muted); font-size: 12px; }
+.device-connection input { width: 128px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: #0f1411; font: 600 14px ui-monospace, monospace; letter-spacing: .18em; }
+.device-connection button { border: 1px solid rgba(133,240,191,.55); border-radius: 999px; padding: 8px 14px; color: var(--ink); background: transparent; cursor: pointer; }
+.device-connection button:disabled { cursor: wait; opacity: .6; }
 .control-panel nav { padding: 24px 12px; display: flex; flex-direction: column; gap: 7px; border-right: 1px solid var(--line); }
 .control-panel nav button { padding: 10px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; text-align: left; font-size: 13px; }
 .control-panel nav button:hover { color: var(--ink); background: rgba(255,255,255,.04); }

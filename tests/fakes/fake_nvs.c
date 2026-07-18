@@ -274,6 +274,26 @@ esp_err_t nvs_erase_all(nvs_handle_t handle_value)
     return ESP_OK;
 }
 
+esp_err_t nvs_erase_key(nvs_handle_t handle_value, const char *key)
+{
+    fake_handle_t *handle = lookup_handle(handle_value);
+    if (handle == NULL) {
+        return ESP_ERR_NVS_INVALID_HANDLE;
+    }
+    if (key == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (handle->mode != NVS_READWRITE) {
+        return ESP_ERR_NVS_READ_ONLY;
+    }
+    fake_entry_t *entry = find_entry(&handle->working, key);
+    if (entry == NULL) {
+        return ESP_ERR_NVS_NOT_FOUND;
+    }
+    (void)memset(entry, 0, sizeof(*entry));
+    return ESP_OK;
+}
+
 esp_err_t nvs_set_str(nvs_handle_t handle_value, const char *key, const char *value)
 {
     fake_handle_t *handle = lookup_handle(handle_value);

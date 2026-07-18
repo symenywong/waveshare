@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "./scripts/verify-pairing-wasm.sh && tsc -b && vite build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },

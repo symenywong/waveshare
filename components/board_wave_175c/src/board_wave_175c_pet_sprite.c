@@ -1,30 +1,30 @@
 #include "board_wave_175c_pet_sprite.h"
 
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 #define PX_CLEAR 0x0000
-#define PX_OUTLINE 0x114A
-#define PX_OUTLINE_SOFT 0x1A50
-#define PX_FUR_DARK 0x22B4
-#define PX_FUR 0x3BF9
-#define PX_FUR_LIGHT 0x6D5C
-#define PX_FUR_HILITE 0xB6DE
-#define PX_FUR_SHADOW 0x1A91
-#define PX_EAR_INNER 0xF6D4
-#define PX_FACE 0x85DC
-#define PX_FACE_SHADOW 0x5CDB
-#define PX_MUZZLE 0xF6D4
+#define PX_OUTLINE_SOFT 0x08C6
+#define PX_FUR_DARK 0x1A94
+#define PX_FUR 0x0BFB
+#define PX_FUR_LIGHT 0x455D
+#define PX_FUR_HILITE 0xB73F
+#define PX_FUR_SHADOW 0x1253
+#define PX_EAR_INNER 0xFF14
+#define PX_FACE 0x76DC
+#define PX_FACE_SHADOW 0x557C
+#define PX_MUZZLE 0xFF14
 #define PX_EYE 0x08C8
-#define PX_EYE_DIM 0x85DC
+#define PX_EYE_DIM 0x76DC
 #define PX_MOUTH 0x08C8
 #define PX_NOSE 0x0866
-#define PX_CHEST 0xF6D4
+#define PX_CHEST 0xFF14
 #define PX_BLUSH 0xFC9F
-#define PX_BODY 0x3BF9
-#define PX_BODY_LIGHT 0x6D5C
-#define PX_BODY_SHADOW 0x22B4
-#define PX_TAIL_CORAL 0xFB8D
+#define PX_BODY 0x0BFB
+#define PX_BODY_LIGHT 0x455D
+#define PX_BODY_SHADOW 0x1A94
+#define PX_EAR_CORAL 0xFB2C
 #define PX_YELLOW 0xFFE0
 #define PX_ORANGE 0xFD20
 #define PX_TEAR 0x7DDF
@@ -43,6 +43,11 @@ typedef struct {
     int right_foot_x;
     int right_foot_y;
 } limb_pose_t;
+
+typedef struct {
+    int x;
+    int y;
+} sprite_point_t;
 
 static const board_wave_175c_pet_sprite_t SPRITES[] = {
     {BOARD_WAVE_175C_PET_EXPRESSION_SLEEPY, SPRITE_PIXELS, BOARD_WAVE_175C_PET_SPRITE_WIDTH, BOARD_WAVE_175C_PET_SPRITE_HEIGHT, BOARD_WAVE_175C_PET_SPRITE_SCALE, SPRITE_CENTER_X, SPRITE_CENTER_Y, 2},
@@ -161,35 +166,36 @@ static void draw_thick_line(uint16_t *pixels, int x0, int y0, int x1, int y1, in
     }
 }
 
-static void draw_four_point_star(
+static int cubic_coordinate(int p0, int p1, int p2, int p3, int step, int steps)
+{
+    const int64_t u = steps - step;
+    const int64_t denominator = (int64_t)steps * steps * steps;
+    const int64_t numerator =
+        u * u * u * p0 +
+        3 * u * u * step * p1 +
+        3 * u * step * step * p2 +
+        (int64_t)step * step * step * p3;
+    return (int)((numerator + denominator / 2) / denominator);
+}
+
+static void draw_tapered_cubic(
     uint16_t *pixels,
-    int center_x,
-    int center_y,
-    int radius,
+    sprite_point_t p0,
+    sprite_point_t p1,
+    sprite_point_t p2,
+    sprite_point_t p3,
+    int start_radius,
+    int end_radius,
     uint16_t color)
 {
-    const int shoulder = radius / 3;
-    fill_triangle(pixels,
-                  center_x, center_y - radius,
-                  center_x - shoulder, center_y - shoulder,
-                  center_x + shoulder, center_y - shoulder,
-                  color);
-    fill_triangle(pixels,
-                  center_x + radius, center_y,
-                  center_x + shoulder, center_y - shoulder,
-                  center_x + shoulder, center_y + shoulder,
-                  color);
-    fill_triangle(pixels,
-                  center_x, center_y + radius,
-                  center_x - shoulder, center_y + shoulder,
-                  center_x + shoulder, center_y + shoulder,
-                  color);
-    fill_triangle(pixels,
-                  center_x - radius, center_y,
-                  center_x - shoulder, center_y - shoulder,
-                  center_x - shoulder, center_y + shoulder,
-                  color);
-    fill_ellipse(pixels, center_x, center_y, shoulder + 1, shoulder + 1, color);
+    enum { CURVE_STEPS = 40 };
+    for (int step = 0; step <= CURVE_STEPS; ++step) {
+        const int x = cubic_coordinate(p0.x, p1.x, p2.x, p3.x, step, CURVE_STEPS);
+        const int y = cubic_coordinate(p0.y, p1.y, p2.y, p3.y, step, CURVE_STEPS);
+        const int radius = start_radius +
+            ((end_radius - start_radius) * step) / CURVE_STEPS;
+        fill_ellipse(pixels, x, y, radius, radius, color);
+    }
 }
 
 static int y_shift_for_expression(board_wave_175c_pet_expression_t expression, size_t frame)
@@ -209,6 +215,33 @@ static int y_shift_for_expression(board_wave_175c_pet_expression_t expression, s
         return frame == 1 ? 2 : 0;
     default:
         return 0;
+    }
+}
+
+static int tail_wag_for_expression(board_wave_175c_pet_expression_t expression, size_t frame)
+{
+    switch (expression) {
+    case BOARD_WAVE_175C_PET_EXPRESSION_HAPPY:
+    case BOARD_WAVE_175C_PET_EXPRESSION_LAUGHING:
+        return frame == 1 ? 5 : 0;
+    case BOARD_WAVE_175C_PET_EXPRESSION_LISTENING:
+    case BOARD_WAVE_175C_PET_EXPRESSION_SPEAKING:
+    case BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS:
+        return frame == 1 ? 3 : 0;
+    case BOARD_WAVE_175C_PET_EXPRESSION_BOUNCING:
+        return frame == 1 ? 4 : (frame == 3 ? -4 : 0);
+    case BOARD_WAVE_175C_PET_EXPRESSION_SLEEPY:
+    case BOARD_WAVE_175C_PET_EXPRESSION_SAD:
+    case BOARD_WAVE_175C_PET_EXPRESSION_SHY:
+    case BOARD_WAVE_175C_PET_EXPRESSION_FRUSTRATED:
+    case BOARD_WAVE_175C_PET_EXPRESSION_CRYING:
+    case BOARD_WAVE_175C_PET_EXPRESSION_WORRIED:
+        return frame == 1 ? 1 : 0;
+    case BOARD_WAVE_175C_PET_EXPRESSION_THINKING:
+        return frame == 1 ? 2 : 0;
+    case BOARD_WAVE_175C_PET_EXPRESSION_IDLE:
+    default:
+        return frame == 1 ? 4 : 0;
     }
 }
 
@@ -328,100 +361,87 @@ static limb_pose_t limb_pose_for_expression(board_wave_175c_pet_expression_t exp
     return pose;
 }
 
-static void draw_tail(uint16_t *pixels, int y_shift, bool raised)
+static void draw_tail(uint16_t *pixels, int y_shift, bool raised, int wag)
 {
     const int lift = raised ? -4 : 0;
-    const int root_y = 116 + y_shift;
-    const int bend_y = 120 + y_shift + lift;
-    const int rise_y = 107 + y_shift + lift;
-    const int tip_y = 84 + y_shift + lift;
+    const sprite_point_t root = {103, 116 + y_shift};
+    const sprite_point_t lower_curve = {120 + wag / 3, 121 + y_shift + lift / 3};
+    const sprite_point_t upper_curve = {143 + (2 * wag) / 3, 123 + y_shift + (2 * lift) / 3};
+    const sprite_point_t tip = {146 + wag, 87 + y_shift + lift};
 
-    draw_thick_line(pixels, 105, root_y, 126, bend_y, 8, PX_OUTLINE_SOFT);
-    draw_thick_line(pixels, 126, bend_y, 143, rise_y, 8, PX_OUTLINE_SOFT);
-    draw_thick_line(pixels, 143, rise_y, 146, 94 + y_shift + lift, 8, PX_OUTLINE_SOFT);
+    draw_tapered_cubic(pixels, root, lower_curve, upper_curve, tip, 7, 5, PX_OUTLINE_SOFT);
+    draw_tapered_cubic(pixels, root, lower_curve, upper_curve, tip, 6, 4, PX_FUR);
+    draw_tapered_cubic(pixels, root, lower_curve, upper_curve, tip, 4, 2, PX_FUR_LIGHT);
 
-    draw_thick_line(pixels, 105, root_y, 126, bend_y, 6, PX_OUTLINE);
-    draw_thick_line(pixels, 126, bend_y, 143, rise_y, 6, PX_OUTLINE);
-    draw_thick_line(pixels, 143, rise_y, 146, 94 + y_shift + lift, 6, PX_OUTLINE);
-
-    draw_thick_line(pixels, 107, root_y, 126, bend_y, 4, PX_FUR_LIGHT);
-    draw_thick_line(pixels, 126, bend_y, 143, rise_y, 4, PX_FUR_LIGHT);
-    draw_thick_line(pixels, 143, rise_y, 146, 94 + y_shift + lift, 4, PX_FUR_LIGHT);
-
-    draw_thick_line(pixels, 117, 115 + y_shift, 115, 123 + y_shift, 3, PX_FUR_DARK);
-    draw_thick_line(pixels, 130, 114 + y_shift + lift, 136, 120 + y_shift + lift, 3, PX_FUR);
-    draw_thick_line(pixels, 138, 103 + y_shift + lift, 147, 105 + y_shift + lift, 3, PX_FUR_DARK);
-    draw_thick_line(pixels, 141, 94 + y_shift + lift, 149, 95 + y_shift + lift, 3, PX_FUR);
-
-    draw_four_point_star(pixels, 145, tip_y, 12, PX_OUTLINE);
-    draw_four_point_star(pixels, 145, tip_y, 9, PX_TAIL_CORAL);
+    draw_thick_line(
+        pixels,
+        144 + (2 * wag) / 3, 100 + y_shift + lift,
+        tip.x, tip.y,
+        1, PX_FUR_DARK);
+    fill_ellipse(pixels, tip.x, tip.y, 2, 3, PX_FUR_DARK);
 }
 
 static void draw_ears(uint16_t *pixels, int y_shift, int ear_tilt)
 {
     const int upright_tip_x = 49 + ear_tilt;
-    const int folded_shift = ear_tilt / 2;
+    const int right_tip_x = 111 - ear_tilt;
 
     fill_triangle(pixels, 32, 58 + y_shift, upright_tip_x, 12 + y_shift, 70, 54 + y_shift, PX_OUTLINE_SOFT);
-    fill_triangle(pixels, 35, 57 + y_shift, upright_tip_x, 15 + y_shift, 68, 53 + y_shift, PX_OUTLINE);
+    fill_triangle(pixels, 35, 57 + y_shift, upright_tip_x, 15 + y_shift, 68, 53 + y_shift, PX_FUR_DARK);
     fill_triangle(pixels, 40, 54 + y_shift, upright_tip_x + 1, 19 + y_shift, 64, 52 + y_shift, PX_FUR);
     fill_triangle(pixels, 45, 51 + y_shift, upright_tip_x + 2, 26 + y_shift, 59, 51 + y_shift, PX_EAR_INNER);
     fill_triangle(pixels, 44, 39 + y_shift, upright_tip_x, 16 + y_shift, 56, 39 + y_shift, PX_FUR_LIGHT);
 
-    fill_triangle(pixels, 91, 51 + y_shift, 116 - folded_shift, 25 + y_shift, 134, 54 + y_shift, PX_OUTLINE_SOFT);
-    fill_ellipse(pixels, 121 - folded_shift, 39 + y_shift, 15, 12, PX_OUTLINE_SOFT);
-    fill_triangle(pixels, 94, 50 + y_shift, 116 - folded_shift, 28 + y_shift, 131, 53 + y_shift, PX_OUTLINE);
-    fill_ellipse(pixels, 120 - folded_shift, 39 + y_shift, 12, 9, PX_OUTLINE);
-    fill_triangle(pixels, 98, 49 + y_shift, 115 - folded_shift, 31 + y_shift, 128, 50 + y_shift, PX_FUR_DARK);
-    fill_ellipse(pixels, 119 - folded_shift, 39 + y_shift, 9, 6, PX_FUR_DARK);
-    fill_triangle(pixels, 103, 47 + y_shift, 115 - folded_shift, 34 + y_shift, 125, 48 + y_shift, PX_TAIL_CORAL);
-    fill_ellipse(pixels, 118 - folded_shift, 40 + y_shift, 6, 4, PX_TAIL_CORAL);
+    fill_triangle(pixels, 91, 57 + y_shift, right_tip_x, 12 + y_shift, 126, 54 + y_shift, PX_OUTLINE_SOFT);
+    fill_triangle(pixels, 94, 55 + y_shift, right_tip_x, 15 + y_shift, 124, 52 + y_shift, PX_FUR_DARK);
+    fill_triangle(pixels, 99, 53 + y_shift, right_tip_x + 1, 20 + y_shift, 121, 50 + y_shift, PX_FUR_DARK);
+    fill_triangle(pixels, 98, 52 + y_shift, right_tip_x - 2, 19 + y_shift, 116, 50 + y_shift, PX_FUR_LIGHT);
+    fill_triangle(pixels, 106, 49 + y_shift, right_tip_x + 1, 29 + y_shift, 119, 49 + y_shift, PX_EAR_CORAL);
 }
 
 static void draw_head(uint16_t *pixels, int y_shift, int ear_tilt)
 {
     draw_ears(pixels, y_shift, ear_tilt);
-    fill_ellipse(pixels, 80, 64 + y_shift, 51, 44, PX_OUTLINE_SOFT);
-    fill_ellipse(pixels, 80, 64 + y_shift, 48, 41, PX_OUTLINE);
-    fill_ellipse(pixels, 80, 63 + y_shift, 44, 37, PX_FUR);
-    fill_ellipse(pixels, 57, 47 + y_shift, 20, 14, PX_FUR_LIGHT);
-    fill_ellipse(pixels, 104, 50 + y_shift, 23, 16, PX_FUR_DARK);
-    fill_ellipse(pixels, 112, 72 + y_shift, 13, 16, PX_FUR_SHADOW);
-    fill_ellipse(pixels, 49, 79 + y_shift, 8, 7, PX_FACE);
-    fill_ellipse(pixels, 111, 79 + y_shift, 8, 7, PX_FACE);
-    fill_ellipse(pixels, 80, 81 + y_shift, 23, 15, PX_FACE_SHADOW);
-    fill_ellipse(pixels, 80, 82 + y_shift, 20, 13, PX_MUZZLE);
-    fill_ellipse(pixels, 72, 77 + y_shift, 7, 6, PX_FUR_HILITE);
+    fill_ellipse(pixels, 80, 65 + y_shift, 47, 41, PX_OUTLINE_SOFT);
+    fill_ellipse(pixels, 80, 65 + y_shift, 46, 40, PX_FUR_DARK);
+    fill_ellipse(pixels, 80, 64 + y_shift, 44, 38, PX_FUR);
+    fill_ellipse(pixels, 58, 48 + y_shift, 18, 13, PX_FUR_LIGHT);
+    fill_ellipse(pixels, 102, 51 + y_shift, 20, 14, PX_FUR_DARK);
+    fill_ellipse(pixels, 110, 73 + y_shift, 11, 14, PX_FUR_SHADOW);
+    fill_ellipse(pixels, 51, 79 + y_shift, 7, 6, PX_FACE);
+    fill_ellipse(pixels, 109, 79 + y_shift, 7, 6, PX_FACE);
+    fill_ellipse(pixels, 80, 82 + y_shift, 20, 14, PX_FACE_SHADOW);
+    fill_ellipse(pixels, 80, 83 + y_shift, 18, 12, PX_MUZZLE);
+    fill_ellipse(pixels, 73, 78 + y_shift, 6, 5, PX_FUR_HILITE);
 }
 
-static void draw_body(uint16_t *pixels, int y_shift, bool lifted, limb_pose_t pose)
+static void draw_body(uint16_t *pixels, int y_shift, bool lifted, limb_pose_t pose, int tail_wag)
 {
     const int lift = lifted ? -7 : 0;
-    draw_tail(pixels, y_shift + lift, lifted);
-    fill_ellipse(pixels, 80, 154, 31, 4, PX_OUTLINE_SOFT);
-    fill_ellipse(pixels, 80, 116 + y_shift + lift, 29, 31, PX_OUTLINE);
-    fill_ellipse(pixels, 80, 115 + y_shift + lift, 25, 28, PX_BODY);
-    fill_ellipse(pixels, 96, 124 + y_shift + lift, 13, 17, PX_BODY_SHADOW);
-    fill_ellipse(pixels, 67, 106 + y_shift + lift, 12, 10, PX_BODY_LIGHT);
-    fill_ellipse(pixels, 80, 122 + y_shift + lift, 14, 20, PX_CHEST);
+    draw_tail(pixels, y_shift + lift, lifted, tail_wag);
+    fill_ellipse(pixels, 80, 117 + y_shift + lift, 29, 32, PX_OUTLINE_SOFT);
+    fill_ellipse(pixels, 80, 116 + y_shift + lift, 27, 30, PX_BODY);
+    fill_ellipse(pixels, 96, 125 + y_shift + lift, 13, 17, PX_BODY_SHADOW);
+    fill_ellipse(pixels, 67, 107 + y_shift + lift, 11, 9, PX_BODY_LIGHT);
+    fill_ellipse(pixels, 80, 123 + y_shift + lift, 13, 20, PX_CHEST);
 
-    const int left_hand_x = 42 + pose.left_hand_x;
-    const int left_hand_y = 130 + y_shift + lift + pose.left_hand_y;
-    const int right_hand_x = 118 + pose.right_hand_x;
-    const int right_hand_y = 130 + y_shift + lift + pose.right_hand_y;
-    draw_thick_line(pixels, 53, 111 + y_shift + lift, left_hand_x - 2, left_hand_y, 7, PX_OUTLINE);
-    draw_thick_line(pixels, 55, 111 + y_shift + lift, left_hand_x + 1, left_hand_y - 2, 4, PX_BODY);
-    draw_thick_line(pixels, 107, 111 + y_shift + lift, right_hand_x + 2, right_hand_y, 7, PX_OUTLINE);
-    draw_thick_line(pixels, 105, 111 + y_shift + lift, right_hand_x - 1, right_hand_y - 2, 4, PX_BODY);
-    fill_ellipse(pixels, left_hand_x, left_hand_y, 7, 6, PX_BODY_LIGHT);
-    fill_ellipse(pixels, right_hand_x, right_hand_y, 7, 6, PX_BODY_LIGHT);
+    const int left_hand_x = 47 + pose.left_hand_x;
+    const int left_hand_y = 129 + y_shift + lift + pose.left_hand_y;
+    const int right_hand_x = 113 + pose.right_hand_x;
+    const int right_hand_y = 129 + y_shift + lift + pose.right_hand_y;
+    draw_thick_line(pixels, 56, 112 + y_shift + lift, left_hand_x - 2, left_hand_y, 6, PX_BODY_SHADOW);
+    draw_thick_line(pixels, 57, 112 + y_shift + lift, left_hand_x + 1, left_hand_y - 2, 4, PX_BODY);
+    draw_thick_line(pixels, 104, 112 + y_shift + lift, right_hand_x + 2, right_hand_y, 6, PX_BODY_SHADOW);
+    draw_thick_line(pixels, 103, 112 + y_shift + lift, right_hand_x - 1, right_hand_y - 2, 4, PX_BODY);
+    fill_ellipse(pixels, left_hand_x, left_hand_y, 6, 5, PX_BODY_LIGHT);
+    fill_ellipse(pixels, right_hand_x, right_hand_y, 6, 5, PX_BODY_LIGHT);
 
     const int left_foot_x = 65 + pose.left_foot_x;
     const int left_foot_y = 143 + y_shift + lift + pose.left_foot_y;
     const int right_foot_x = 95 + pose.right_foot_x;
     const int right_foot_y = 143 + y_shift + lift + pose.right_foot_y;
-    fill_ellipse(pixels, left_foot_x, left_foot_y, 12, 7, PX_OUTLINE);
-    fill_ellipse(pixels, right_foot_x, right_foot_y, 12, 7, PX_OUTLINE);
+    fill_ellipse(pixels, left_foot_x, left_foot_y, 10, 6, PX_BODY_SHADOW);
+    fill_ellipse(pixels, right_foot_x, right_foot_y, 10, 6, PX_BODY_SHADOW);
     fill_ellipse(pixels, left_foot_x, left_foot_y - 2, 8, 4, PX_BODY_LIGHT);
     fill_ellipse(pixels, right_foot_x, right_foot_y - 2, 8, 4, PX_BODY_LIGHT);
 
@@ -431,45 +451,43 @@ static void draw_body(uint16_t *pixels, int y_shift, bool lifted, limb_pose_t po
 
 static void draw_fox_muzzle(uint16_t *pixels, int y_shift)
 {
-    fill_ellipse(pixels, 80, 78 + y_shift, 5, 4, PX_NOSE);
-    fill_ellipse(pixels, 78, 77 + y_shift, 1, 1, PX_FUR_HILITE);
-    draw_thick_line(pixels, 80, 81 + y_shift, 80, 87 + y_shift, 1, PX_MOUTH);
-    draw_thick_line(pixels, 80, 87 + y_shift, 73, 91 + y_shift, 1, PX_MOUTH);
-    draw_thick_line(pixels, 80, 87 + y_shift, 87, 91 + y_shift, 1, PX_MOUTH);
-    fill_ellipse(pixels, 62, 81 + y_shift, 1, 1, PX_FACE_SHADOW);
-    fill_ellipse(pixels, 66, 85 + y_shift, 1, 1, PX_FACE_SHADOW);
-    fill_ellipse(pixels, 98, 81 + y_shift, 1, 1, PX_FACE_SHADOW);
-    fill_ellipse(pixels, 94, 85 + y_shift, 1, 1, PX_FACE_SHADOW);
+    fill_ellipse(pixels, 80, 80 + y_shift, 4, 3, PX_NOSE);
+    fill_ellipse(pixels, 78, 79 + y_shift, 1, 1, PX_FUR_HILITE);
+    draw_thick_line(pixels, 80, 83 + y_shift, 80, 86 + y_shift, 1, PX_MOUTH);
+    fill_ellipse(pixels, 64, 83 + y_shift, 1, 1, PX_FACE_SHADOW);
+    fill_ellipse(pixels, 68, 87 + y_shift, 1, 1, PX_FACE_SHADOW);
+    fill_ellipse(pixels, 96, 83 + y_shift, 1, 1, PX_FACE_SHADOW);
+    fill_ellipse(pixels, 92, 87 + y_shift, 1, 1, PX_FACE_SHADOW);
 }
 
 static void draw_open_eye(uint16_t *pixels, int x, int y, uint16_t color)
 {
-    fill_ellipse(pixels, x, y, 8, 10, PX_MOUTH);
-    fill_ellipse(pixels, x, y, 5, 7, color);
-    fill_ellipse(pixels, x - 2, y - 3, 2, 2, PX_FUR_HILITE);
+    fill_ellipse(pixels, x, y, 6, 9, PX_MOUTH);
+    fill_ellipse(pixels, x, y, 4, 6, color);
+    fill_ellipse(pixels, x - 2, y - 3, 1, 1, PX_FUR_HILITE);
 }
 
 static void draw_open_eye_offset(uint16_t *pixels, int x, int y, int look_x, int look_y, uint16_t color)
 {
-    fill_ellipse(pixels, x, y, 8, 10, PX_MOUTH);
-    fill_ellipse(pixels, x + look_x, y + look_y, 5, 7, color);
-    fill_ellipse(pixels, x + look_x - 2, y + look_y - 3, 2, 2, PX_FUR_HILITE);
+    fill_ellipse(pixels, x, y, 6, 9, PX_MOUTH);
+    fill_ellipse(pixels, x + look_x, y + look_y, 4, 6, color);
+    fill_ellipse(pixels, x + look_x - 2, y + look_y - 3, 1, 1, PX_FUR_HILITE);
 }
 
 static void draw_flat_eye(uint16_t *pixels, int x, int y, uint16_t color)
 {
-    fill_rounded_rect(pixels, x - 8, y - 2, 16, 5, 2, color);
+    fill_rounded_rect(pixels, x - 6, y - 2, 12, 5, 2, color);
 }
 
 static void draw_happy_eye(uint16_t *pixels, int x, int y)
 {
-    draw_thick_line(pixels, x - 8, y + 4, x, y - 2, 2, PX_EYE);
-    draw_thick_line(pixels, x, y - 2, x + 8, y + 4, 2, PX_EYE);
+    draw_thick_line(pixels, x - 6, y + 3, x, y - 2, 2, PX_EYE);
+    draw_thick_line(pixels, x, y - 2, x + 6, y + 3, 2, PX_EYE);
 }
 
 static void draw_sad_eye(uint16_t *pixels, int x, int y)
 {
-    draw_thick_line(pixels, x - 8, y - 2, x + 8, y + 4, 2, PX_EYE);
+    draw_thick_line(pixels, x - 6, y - 2, x + 6, y + 3, 2, PX_EYE);
 }
 
 static void draw_mouth(uint16_t *pixels, int cx, int cy, int width, int mood)
@@ -504,8 +522,8 @@ static void draw_expression(
     size_t frame,
     int y_shift)
 {
-    const int left_eye_x = 63;
-    const int right_eye_x = 97;
+    const int left_eye_x = 65;
+    const int right_eye_x = 95;
     const int eye_y = 66 + y_shift;
     draw_fox_muzzle(pixels, y_shift);
     switch (expression) {
@@ -513,8 +531,8 @@ static void draw_expression(
         draw_flat_eye(pixels, left_eye_x, eye_y, PX_EYE_DIM);
         draw_flat_eye(pixels, right_eye_x, eye_y, PX_EYE_DIM);
         draw_mouth(pixels, 80, 88 + y_shift, 9, 0);
-        draw_thick_line(pixels, 119, 34 + y_shift - (int)frame * 3, 128, 27 + y_shift - (int)frame * 3, 1, frame == 0 ? PX_EYE_DIM : PX_EYE);
-        draw_thick_line(pixels, 127, 26 + y_shift - (int)frame * 3, 136, 26 + y_shift - (int)frame * 3, 1, PX_EYE_DIM);
+        draw_thick_line(pixels, 137, 34 + y_shift - (int)frame * 3, 146, 27 + y_shift - (int)frame * 3, 1, frame == 0 ? PX_EYE_DIM : PX_EYE);
+        draw_thick_line(pixels, 145, 26 + y_shift - (int)frame * 3, 155, 26 + y_shift - (int)frame * 3, 1, PX_EYE_DIM);
         break;
     case BOARD_WAVE_175C_PET_EXPRESSION_LISTENING:
         draw_open_eye_offset(pixels, left_eye_x, eye_y, 0, frame == 2 ? -1 : 0, PX_EYE);
@@ -523,12 +541,12 @@ static void draw_expression(
         draw_listening_waves(pixels, y_shift, frame);
         break;
     case BOARD_WAVE_175C_PET_EXPRESSION_THINKING:
-        draw_open_eye_offset(pixels, left_eye_x, eye_y, (int)frame - 1, 0, PX_EYE_DIM);
+        draw_open_eye_offset(pixels, left_eye_x, eye_y, (int)frame - 1, 0, PX_EYE);
         draw_open_eye_offset(pixels, right_eye_x, eye_y - 2, (int)frame - 1, 0, PX_EYE);
         draw_mouth(pixels, 80, 88 + y_shift, 9, 0);
-        fill_ellipse(pixels, 116, 38 + y_shift, frame == 0 ? 5 : 3, frame == 0 ? 5 : 3, frame == 0 ? PX_YELLOW : PX_EYE_DIM);
-        fill_ellipse(pixels, 128, 36 + y_shift, frame == 1 ? 5 : 3, frame == 1 ? 5 : 3, frame == 1 ? PX_YELLOW : PX_EYE_DIM);
-        fill_ellipse(pixels, 140, 39 + y_shift, frame == 2 ? 5 : 3, frame == 2 ? 5 : 3, frame == 2 ? PX_YELLOW : PX_EYE_DIM);
+        fill_ellipse(pixels, 136, 38 + y_shift, frame == 0 ? 5 : 3, frame == 0 ? 5 : 3, frame == 0 ? PX_YELLOW : PX_EYE_DIM);
+        fill_ellipse(pixels, 146, 36 + y_shift, frame == 1 ? 5 : 3, frame == 1 ? 5 : 3, frame == 1 ? PX_YELLOW : PX_EYE_DIM);
+        fill_ellipse(pixels, 152, 39 + y_shift, frame == 2 ? 5 : 3, frame == 2 ? 5 : 3, frame == 2 ? PX_YELLOW : PX_EYE_DIM);
         break;
     case BOARD_WAVE_175C_PET_EXPRESSION_SPEAKING:
         draw_open_eye(pixels, left_eye_x, eye_y, PX_EYE);
@@ -556,8 +574,8 @@ static void draw_expression(
         draw_thick_line(pixels, 55 + (int)frame * 2, 60 + y_shift, 70 - (int)frame, 67 + y_shift, 2, PX_ORANGE);
         draw_thick_line(pixels, 105 - (int)frame * 2, 60 + y_shift, 90 + (int)frame, 67 + y_shift, 2, PX_ORANGE);
         draw_mouth(pixels, 80, 90 + y_shift, 18, -1);
-        draw_thick_line(pixels, 119 + (int)frame * 2, 33 + y_shift - (int)frame * 2, 130 + (int)frame * 2, 24 + y_shift - (int)frame, 2, PX_ORANGE);
-        draw_thick_line(pixels, 126 + (int)frame * 2, 35 + y_shift - (int)frame * 2, 136 + (int)frame * 2, 35 + y_shift - (int)frame * 2, 1, PX_ORANGE);
+        draw_thick_line(pixels, 138 + (int)frame * 2, 33 + y_shift - (int)frame * 2, 149 + (int)frame * 2, 24 + y_shift - (int)frame, 2, PX_ORANGE);
+        draw_thick_line(pixels, 145 + (int)frame * 2, 35 + y_shift - (int)frame * 2, 155, 35 + y_shift - (int)frame * 2, 1, PX_ORANGE);
         break;
     case BOARD_WAVE_175C_PET_EXPRESSION_LAUGHING:
         draw_happy_eye(pixels, left_eye_x, eye_y);
@@ -586,15 +604,15 @@ static void draw_expression(
         draw_open_eye_offset(pixels, left_eye_x, eye_y, (int)frame - 1, 0, PX_EYE);
         fill_ellipse(pixels, right_eye_x + (int)frame - 1, eye_y, frame == 1 ? 7 : 6, frame == 1 ? 7 : 6, PX_EYE);
         draw_mouth(pixels, 80, 88 + y_shift, 8, 0);
-        draw_thick_line(pixels, 118 + (int)frame * 3, 31 + y_shift, 118 + (int)frame * 3, 41 + y_shift, 2, PX_YELLOW);
-        fill_ellipse(pixels, 118 + (int)frame * 3, 50 + y_shift, 3, 3, PX_YELLOW);
+        draw_thick_line(pixels, 144 + (int)frame * 3, 31 + y_shift, 144 + (int)frame * 3, 41 + y_shift, 2, PX_YELLOW);
+        fill_ellipse(pixels, 144 + (int)frame * 3, 50 + y_shift, 3, 3, PX_YELLOW);
         break;
     case BOARD_WAVE_175C_PET_EXPRESSION_WORRIED:
         draw_sad_eye(pixels, left_eye_x, eye_y);
         draw_open_eye_offset(pixels, right_eye_x, eye_y, frame == 1 ? -1 : 0, 0, PX_EYE_DIM);
         draw_mouth(pixels, 80, 89 + y_shift, frame == 1 ? 10 : 12, -1);
-        fill_ellipse(pixels, 119, 38 + y_shift + (int)frame * 2, 4, 9, frame == 1 ? PX_YELLOW : PX_ORANGE);
-        fill_ellipse(pixels, 119, 52 + y_shift + (int)frame * 2, 2, 2, PX_ORANGE);
+        fill_ellipse(pixels, 145, 38 + y_shift + (int)frame * 2, 4, 9, frame == 1 ? PX_YELLOW : PX_ORANGE);
+        fill_ellipse(pixels, 145, 52 + y_shift + (int)frame * 2, 2, 2, PX_ORANGE);
         break;
     case BOARD_WAVE_175C_PET_EXPRESSION_BOUNCING:
     case BOARD_WAVE_175C_PET_EXPRESSION_HAPPY:
@@ -673,6 +691,7 @@ bool board_wave_175c_pet_sprite_render(
     const int y_shift = y_shift_for_expression(sprite->expression, frame);
     const bool lifted = sprite->expression == BOARD_WAVE_175C_PET_EXPRESSION_BOUNCING && frame == 1;
     const limb_pose_t pose = limb_pose_for_expression(sprite->expression, frame);
+    const int tail_wag = tail_wag_for_expression(sprite->expression, frame);
     int ear_tilt = 0;
     if (sprite->expression == BOARD_WAVE_175C_PET_EXPRESSION_LISTENING) {
         ear_tilt = frame == 1 ? 5 : (frame == 2 ? -3 : 0);
@@ -685,7 +704,7 @@ bool board_wave_175c_pet_sprite_render(
         ear_tilt = frame == 1 ? -4 : -2;
     }
 
-    draw_body(out_pixels, y_shift, lifted, pose);
+    draw_body(out_pixels, y_shift, lifted, pose, tail_wag);
     draw_head(out_pixels, y_shift, ear_tilt);
     draw_expression(out_pixels, sprite->expression, frame, y_shift);
 
@@ -708,7 +727,6 @@ bool board_wave_175c_pet_sprite_layout_is_circle_safe(void)
 }
 
 #undef PX_CLEAR
-#undef PX_OUTLINE
 #undef PX_OUTLINE_SOFT
 #undef PX_FUR_DARK
 #undef PX_FUR
@@ -728,7 +746,7 @@ bool board_wave_175c_pet_sprite_layout_is_circle_safe(void)
 #undef PX_BODY
 #undef PX_BODY_LIGHT
 #undef PX_BODY_SHADOW
-#undef PX_TAIL_CORAL
+#undef PX_EAR_CORAL
 #undef PX_YELLOW
 #undef PX_ORANGE
 #undef PX_TEAR

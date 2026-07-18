@@ -78,6 +78,9 @@ static esp_err_t init_codec(const aiqa_audio_playback_config_t *config)
     };
     s_codec = esp_codec_dev_new(&device_config);
     ESP_RETURN_ON_FALSE(s_codec != NULL, ESP_ERR_NO_MEM, TAG, "ES8311 codec device create failed");
+    ESP_RETURN_ON_ERROR(codec_status_to_esp(esp_codec_dev_set_out_vol(s_codec, config->volume_percent)),
+                        TAG,
+                        "ES8311 initial volume set failed");
     ESP_LOGI(TAG, "ES8311 playback path initialized: %lu Hz, %u-bit, %u channel, volume=%u",
              (unsigned long)config->sample_rate_hz,
              (unsigned)config->bits_per_sample,
@@ -93,10 +96,7 @@ esp_err_t aiqa_audio_playback_hw_init(const aiqa_audio_playback_config_t *config
     }
     if (s_codec != NULL) {
         s_config.volume_percent = config->volume_percent;
-        if (s_started) {
-            return codec_status_to_esp(esp_codec_dev_set_out_vol(s_codec, s_config.volume_percent));
-        }
-        return ESP_OK;
+        return codec_status_to_esp(esp_codec_dev_set_out_vol(s_codec, s_config.volume_percent));
     }
 
     s_config = *config;
