@@ -9,6 +9,7 @@
 #include "esp_log.h"
 
 #include <inttypes.h>
+#include <stdatomic.h>
 
 static const char *TAG = "board_175c";
 
@@ -17,6 +18,17 @@ static const char *TAG = "board_175c";
 
 static i2c_master_bus_handle_t s_i2c_bus;
 static i2c_master_dev_handle_t s_axp2101_dev;
+static atomic_uint_least32_t s_init_phase = ATOMIC_VAR_INIT(0U);
+
+uint32_t board_wave_175c_init_phase(void)
+{
+    return atomic_load_explicit(&s_init_phase, memory_order_acquire);
+}
+
+static void set_init_phase(uint32_t phase)
+{
+    atomic_store_explicit(&s_init_phase, phase, memory_order_release);
+}
 
 static esp_err_t ensure_i2c_bus(void)
 {
@@ -68,21 +80,33 @@ static esp_err_t axp2101_read_reg(uint8_t reg, uint8_t *out_value)
 
 static esp_err_t init_axp2101_power(void)
 {
+    set_init_phase(6U);
     ESP_RETURN_ON_ERROR(axp2101_write_reg(0x22, 0x06), TAG, "AXP2101 power key source config failed");
+    set_init_phase(7U);
     ESP_RETURN_ON_ERROR(axp2101_write_reg(0x27, 0x10), TAG, "AXP2101 power-off hold config failed");
+    set_init_phase(8U);
     ESP_RETURN_ON_ERROR(axp2101_write_reg(0x80, 0x01), TAG, "AXP2101 DC enable config failed");
+    set_init_phase(9U);
     ESP_RETURN_ON_ERROR(axp2101_write_reg(0x90, 0x00), TAG, "AXP2101 LDO0 disable failed");
+    set_init_phase(10U);
     ESP_RETURN_ON_ERROR(axp2101_write_reg(0x91, 0x00), TAG, "AXP2101 LDO1 disable failed");
+    set_init_phase(11U);
     ESP_RETURN_ON_ERROR(axp2101_write_reg(0x82, (uint8_t)((3300 - 1500) / 100)),
                         TAG,
                         "AXP2101 DC1 voltage config failed");
+    set_init_phase(12U);
     ESP_RETURN_ON_ERROR(axp2101_write_reg(0x92, (uint8_t)((3300 - 500) / 100)),
                         TAG,
                         "AXP2101 ALDO1 voltage config failed");
+    set_init_phase(13U);
     ESP_RETURN_ON_ERROR(axp2101_write_reg(0x90, 0x01), TAG, "AXP2101 ALDO1 enable failed");
+    set_init_phase(14U);
     ESP_RETURN_ON_ERROR(axp2101_write_reg(0x64, 0x02), TAG, "AXP2101 charger voltage config failed");
+    set_init_phase(15U);
     ESP_RETURN_ON_ERROR(axp2101_write_reg(0x61, 0x02), TAG, "AXP2101 precharge current config failed");
+    set_init_phase(16U);
     ESP_RETURN_ON_ERROR(axp2101_write_reg(0x62, 0x08), TAG, "AXP2101 charge current config failed");
+    set_init_phase(17U);
     ESP_RETURN_ON_ERROR(axp2101_write_reg(0x63, 0x01), TAG, "AXP2101 termination current config failed");
     ESP_LOGI(TAG, "AXP2101 power rails initialized for 1.75C audio/display domains");
     return ESP_OK;
@@ -90,6 +114,7 @@ static esp_err_t init_axp2101_power(void)
 
 esp_err_t board_wave_175c_init_minimal(void)
 {
+    set_init_phase(1U);
     gpio_config_t boot_config = {
         .pin_bit_mask = 1ULL << WAVE_175C_BOOT_BUTTON,
         .mode = GPIO_MODE_INPUT,
@@ -99,6 +124,7 @@ esp_err_t board_wave_175c_init_minimal(void)
     };
     ESP_RETURN_ON_ERROR(gpio_config(&boot_config), TAG, "BOOT gpio config failed");
 
+    set_init_phase(2U);
     gpio_config_t pa_config = {
         .pin_bit_mask = 1ULL << WAVE_175C_PA,
         .mode = GPIO_MODE_OUTPUT,
@@ -107,9 +133,13 @@ esp_err_t board_wave_175c_init_minimal(void)
         .intr_type = GPIO_INTR_DISABLE,
     };
     ESP_RETURN_ON_ERROR(gpio_config(&pa_config), TAG, "PA gpio config failed");
+    set_init_phase(3U);
     ESP_RETURN_ON_ERROR(board_wave_175c_set_pa_enabled(false), TAG, "PA safe-off failed");
+    set_init_phase(4U);
     ESP_RETURN_ON_ERROR(ensure_i2c_bus(), TAG, "I2C bus init failed");
+    set_init_phase(5U);
     ESP_RETURN_ON_ERROR(init_axp2101_power(), TAG, "AXP2101 power init failed");
+    set_init_phase(18U);
 
     ESP_LOGI(TAG, "Board constants loaded: LCD %dx%d, I2C SDA=%d SCL=%d",
              WAVE_175C_LCD_WIDTH,
@@ -124,6 +154,7 @@ esp_err_t board_wave_175c_init_minimal(void)
              WAVE_175C_ES8311_DOUT,
              WAVE_175C_PA);
     ESP_LOGW(TAG, "Hardware drivers are intentionally staged; run bring-up before enabling real ASR");
+    set_init_phase(19U);
     return ESP_OK;
 }
 
@@ -159,7 +190,11 @@ esp_err_t board_wave_175c_i2c_scan(board_wave_175c_i2c_scan_result_t *result)
     ESP_RETURN_ON_ERROR(ensure_i2c_bus(), TAG, "I2C bus init failed");
 
     *result = (board_wave_175c_i2c_scan_result_t){0};
-    for (uint8_t address = 0x08; address <= 0x77; ++address) {
+    const board_wave_175c_i2c_device_t *expected =
+        board_wave_175c_expected_i2c_devices();
+    const size_t expected_count = board_wave_175c_expected_i2c_device_count();
+    for (size_t index = 0; index < expected_count; ++index) {
+        const uint8_t address = expected[index].address;
         esp_err_t probe_result = i2c_master_probe(s_i2c_bus, address, 50);
         if (probe_result == ESP_OK &&
             result->address_count < (sizeof(result->addresses) / sizeof(result->addresses[0]))) {

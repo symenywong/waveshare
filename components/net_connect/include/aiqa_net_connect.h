@@ -15,6 +15,7 @@ esp_err_t aiqa_net_connect_wifi(
     const aiqa_net_policy_t *policy);
 
 esp_err_t aiqa_net_sync_time(const aiqa_net_policy_t *policy);
+bool aiqa_net_time_is_synchronized(void);
 esp_err_t aiqa_net_disconnect_wifi(void);
 /* Network-owner-only reset path; deinitializes the driver to discard RAM credentials. */
 esp_err_t aiqa_net_forget_wifi(void);

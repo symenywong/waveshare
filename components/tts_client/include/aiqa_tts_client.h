@@ -31,6 +31,16 @@ esp_err_t aiqa_tts_speak_streaming(
     void *user_ctx,
     aiqa_tts_result_t *result);
 
+esp_err_t aiqa_tts_speak_streaming_with_epoch(
+    const aiqa_config_t *config,
+    const aiqa_secret_config_t *secrets,
+    const char *text,
+    uint32_t request_epoch,
+    aiqa_tts_audio_cb_t on_audio,
+    void *user_ctx,
+    aiqa_tts_result_t *result);
+
+uint32_t aiqa_tts_request_epoch_capture(void);
 void aiqa_tts_cancel_active_request(void);
 
 #ifdef __cplusplus

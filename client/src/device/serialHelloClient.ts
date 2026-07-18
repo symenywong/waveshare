@@ -1,6 +1,10 @@
 import { z } from 'zod'
 
 import { ManagementFrameDecoder, encodeManagementFrame } from './serialFrameCodec'
+import {
+  helloDiagnosticsSchema,
+  type HelloDiagnostics,
+} from './serialDiagnostics'
 
 export interface SerialReader {
   read(): Promise<{ readonly done: boolean; readonly value?: Uint8Array }>
@@ -34,6 +38,7 @@ export interface SerialHello {
   readonly version: 1
   readonly maxFrameBytes: 4096
   readonly authentication: 'authentication_required'
+  readonly diagnostics: HelloDiagnostics
 }
 
 const helloEnvelopeSchema = z
@@ -47,6 +52,7 @@ const helloEnvelopeSchema = z
         version: z.literal(1),
         maxFrameBytes: z.literal(4096),
         authentication: z.literal('authentication_required'),
+        diagnostics: helloDiagnosticsSchema.optional().default(null),
       })
       .strict(),
   })

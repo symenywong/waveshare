@@ -647,9 +647,10 @@ static bool parse_wifi_update(
     return true;
 }
 
-bool aiqa_management_protocol_handle_public_request(
+bool aiqa_management_protocol_handle_public_request_with_ports(
     const uint8_t *payload,
     size_t payload_length,
+    const aiqa_management_public_protocol_ports_t *ports,
     char *out_response,
     size_t response_capacity,
     size_t *out_response_length)
@@ -672,15 +673,135 @@ bool aiqa_management_protocol_handle_public_request(
 
     bool produced = false;
     if (strcmp(method, "system.hello") == 0) {
-        produced = write_response(
-            out_response,
-            response_capacity,
-            out_response_length,
-            "{\"v\":1,\"id\":%u,\"ok\":true,\"result\":{"
-            "\"protocol\":\"aiqa-management\",\"version\":1,"
-            "\"maxFrameBytes\":4096,"
-            "\"authentication\":\"authentication_required\"}}",
-            request_id);
+        aiqa_management_public_diagnostics_t diagnostics = {0};
+        const bool has_diagnostics = ports != NULL &&
+            ports->copy_diagnostics != NULL &&
+            ports->copy_diagnostics(ports->context, &diagnostics);
+        if (has_diagnostics) {
+            const uint32_t compatible_asr_phase =
+                diagnostics.asr.phase <= 4U ? diagnostics.asr.phase : 2U;
+            const int written = snprintf(
+                out_response,
+                response_capacity,
+                "{\"v\":1,\"id\":%u,\"ok\":true,\"result\":{"
+                "\"protocol\":\"aiqa-management\",\"version\":1,"
+                "\"maxFrameBytes\":4096,"
+                "\"authentication\":\"authentication_required\","
+                "\"diagnostics\":{\"snapshotVersion\":1,"
+                "\"runtimeReady\":%s,\"runtimeStartPhase\":%u,"
+                "\"runtimeStartStatus\":%d,\"boardInitPhase\":%u,"
+                "\"generation\":%u,\"state\":\"%s\",\"error\":\"%s\","
+                "\"stateSequence\":%u,\"asr\":{"
+                "\"requestEpoch\":%u,\"phase\":%u,\"status\":%d,"
+                "\"httpStatus\":%d,\"transportStatus\":%d,"
+                "\"contentLength\":%lld,\"pcmBytes\":%u,"
+                "\"postBytes\":%u,\"uploadedBytes\":%u,"
+                "\"responseBytes\":%u,\"responseLimit\":%u,"
+                "\"headerWaitMs\":%u,\"elapsedMs\":%u,"
+                "\"responseComplete\":%s}}}}",
+                (unsigned)request_id,
+                diagnostics.runtime_ready ? "true" : "false",
+                (unsigned)diagnostics.runtime_start_phase,
+                (int)diagnostics.runtime_start_status,
+                (unsigned)diagnostics.board_init_phase,
+                (unsigned)diagnostics.generation,
+                state_name(diagnostics.state),
+                error_name(diagnostics.error),
+                (unsigned)diagnostics.state_sequence,
+                (unsigned)diagnostics.asr.request_epoch,
+                (unsigned)compatible_asr_phase,
+                (int)diagnostics.asr.status,
+                (int)diagnostics.asr.http_status,
+                (int)diagnostics.asr.transport_status,
+                (long long)diagnostics.asr.content_length,
+                (unsigned)diagnostics.asr.pcm_bytes,
+                (unsigned)diagnostics.asr.post_bytes,
+                (unsigned)diagnostics.asr.uploaded_bytes,
+                (unsigned)diagnostics.asr.response_bytes,
+                (unsigned)diagnostics.asr.response_limit,
+                (unsigned)diagnostics.asr.header_wait_ms,
+                (unsigned)diagnostics.asr.elapsed_ms,
+                diagnostics.asr.response_complete ? "true" : "false");
+            produced = written >= 0 && (size_t)written < response_capacity;
+            *out_response_length = produced ? (size_t)written : 0U;
+            if (!produced) {
+                out_response[0] = '\0';
+            }
+            secure_zero(&diagnostics, sizeof(diagnostics));
+        } else {
+            produced = write_response(
+                out_response,
+                response_capacity,
+                out_response_length,
+                "{\"v\":1,\"id\":%u,\"ok\":true,\"result\":{"
+                "\"protocol\":\"aiqa-management\",\"version\":1,"
+                "\"maxFrameBytes\":4096,"
+                "\"authentication\":\"authentication_required\","
+                "\"diagnostics\":null}}",
+                request_id);
+        }
+    } else if (strcmp(method, "system.diagnostics") == 0) {
+        aiqa_management_public_diagnostics_t diagnostics = {0};
+        const bool has_diagnostics = ports != NULL &&
+            ports->copy_diagnostics != NULL &&
+            ports->copy_diagnostics(ports->context, &diagnostics);
+        if (has_diagnostics) {
+            const int written = snprintf(
+                out_response,
+                response_capacity,
+                "{\"v\":1,\"id\":%u,\"ok\":true,\"result\":{"
+                "\"snapshotVersion\":2,"
+                "\"runtimeReady\":%s,\"runtimeStartPhase\":%u,"
+                "\"runtimeStartStatus\":%d,\"boardInitPhase\":%u,"
+                "\"generation\":%u,\"state\":\"%s\",\"error\":\"%s\","
+                "\"stateSequence\":%u,\"asr\":{"
+                "\"requestEpoch\":%u,\"phase\":%u,\"status\":%d,"
+                "\"httpStatus\":%d,\"transportStatus\":%d,"
+                "\"socketErrno\":%d,\"contentLength\":%lld,\"pcmBytes\":%u,"
+                "\"postBytes\":%u,\"uploadedBytes\":%u,"
+                "\"uploadWriteCalls\":%u,"
+                "\"responseBytes\":%u,\"responseLimit\":%u,"
+                "\"headerWaitMs\":%u,\"elapsedMs\":%u,"
+                "\"responseComplete\":%s}}}",
+                (unsigned)request_id,
+                diagnostics.runtime_ready ? "true" : "false",
+                (unsigned)diagnostics.runtime_start_phase,
+                (int)diagnostics.runtime_start_status,
+                (unsigned)diagnostics.board_init_phase,
+                (unsigned)diagnostics.generation,
+                state_name(diagnostics.state),
+                error_name(diagnostics.error),
+                (unsigned)diagnostics.state_sequence,
+                (unsigned)diagnostics.asr.request_epoch,
+                (unsigned)diagnostics.asr.phase,
+                (int)diagnostics.asr.status,
+                (int)diagnostics.asr.http_status,
+                (int)diagnostics.asr.transport_status,
+                (int)diagnostics.asr.socket_errno,
+                (long long)diagnostics.asr.content_length,
+                (unsigned)diagnostics.asr.pcm_bytes,
+                (unsigned)diagnostics.asr.post_bytes,
+                (unsigned)diagnostics.asr.uploaded_bytes,
+                (unsigned)diagnostics.asr.upload_write_calls,
+                (unsigned)diagnostics.asr.response_bytes,
+                (unsigned)diagnostics.asr.response_limit,
+                (unsigned)diagnostics.asr.header_wait_ms,
+                (unsigned)diagnostics.asr.elapsed_ms,
+                diagnostics.asr.response_complete ? "true" : "false");
+            produced = written >= 0 && (size_t)written < response_capacity;
+            *out_response_length = produced ? (size_t)written : 0U;
+            if (!produced) {
+                out_response[0] = '\0';
+            }
+            secure_zero(&diagnostics, sizeof(diagnostics));
+        } else {
+            produced = write_response(
+                out_response,
+                response_capacity,
+                out_response_length,
+                "{\"v\":1,\"id\":%u,\"ok\":true,\"result\":null}",
+                request_id);
+        }
     } else {
         produced = write_response(
             out_response,
@@ -693,6 +814,22 @@ bool aiqa_management_protocol_handle_public_request(
     }
     cJSON_Delete(root);
     return produced;
+}
+
+bool aiqa_management_protocol_handle_public_request(
+    const uint8_t *payload,
+    size_t payload_length,
+    char *out_response,
+    size_t response_capacity,
+    size_t *out_response_length)
+{
+    return aiqa_management_protocol_handle_public_request_with_ports(
+        payload,
+        payload_length,
+        NULL,
+        out_response,
+        response_capacity,
+        out_response_length);
 }
 
 bool aiqa_management_protocol_handle_authenticated_request(

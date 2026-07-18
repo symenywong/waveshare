@@ -104,6 +104,38 @@ typedef struct {
 } aiqa_management_public_config_t;
 
 typedef struct {
+    uint32_t request_epoch;
+    uint32_t phase;
+    int32_t status;
+    int32_t http_status;
+    int32_t transport_status;
+    int32_t socket_errno;
+    int64_t content_length;
+    uint32_t pcm_bytes;
+    uint32_t post_bytes;
+    uint32_t uploaded_bytes;
+    uint32_t upload_write_calls;
+    uint32_t response_bytes;
+    uint32_t response_limit;
+    uint32_t header_wait_ms;
+    uint32_t elapsed_ms;
+    bool response_complete;
+} aiqa_management_public_asr_diagnostics_t;
+
+/* Unauthenticated USB projection: fixed scalar fields, no user or config content. */
+typedef struct {
+    bool runtime_ready;
+    uint32_t runtime_start_phase;
+    int32_t runtime_start_status;
+    uint32_t board_init_phase;
+    uint32_t generation;
+    aiqa_state_t state;
+    aiqa_error_code_t error;
+    uint32_t state_sequence;
+    aiqa_management_public_asr_diagnostics_t asr;
+} aiqa_management_public_diagnostics_t;
+
+typedef struct {
     uint32_t base_revision;
     aiqa_wifi_password_action_t password_action;
     char ssid[AIQA_MAX_WIFI_SSID_LEN];

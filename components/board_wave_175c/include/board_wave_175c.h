@@ -32,6 +32,7 @@ typedef struct {
 } board_wave_175c_display_page_t;
 
 esp_err_t board_wave_175c_init_minimal(void);
+uint32_t board_wave_175c_init_phase(void);
 esp_err_t board_wave_175c_run_bringup_checks(void);
 esp_err_t board_wave_175c_i2c_scan(board_wave_175c_i2c_scan_result_t *result);
 esp_err_t board_wave_175c_boot_button_is_pressed(bool *pressed);

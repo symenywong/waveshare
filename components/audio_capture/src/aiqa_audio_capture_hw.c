@@ -121,12 +121,23 @@ esp_err_t aiqa_audio_capture_hw_start(void)
         .sample_rate = s_config.sample_rate_hz,
         .mclk_multiple = 0,
     };
-    ESP_RETURN_ON_ERROR(codec_status_to_esp(esp_codec_dev_open(s_codec, &sample_config)),
-                        TAG,
-                        "ES7210 open failed");
-    ESP_RETURN_ON_ERROR(codec_status_to_esp(esp_codec_dev_set_in_gain(s_codec, s_config.mic_gain_db)),
-                        TAG,
-                        "ES7210 gain set failed");
+    esp_err_t ret = codec_status_to_esp(esp_codec_dev_open(s_codec, &sample_config));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "ES7210 open failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    ret = codec_status_to_esp(
+        esp_codec_dev_set_in_gain(s_codec, s_config.mic_gain_db));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "ES7210 gain set failed: %s", esp_err_to_name(ret));
+        const esp_err_t close_ret =
+            codec_status_to_esp(esp_codec_dev_close(s_codec));
+        if (close_ret != ESP_OK) {
+            ESP_LOGE(TAG, "ES7210 rollback close failed: %s",
+                     esp_err_to_name(close_ret));
+        }
+        return ret;
+    }
     s_started = true;
     return ESP_OK;
 }
@@ -181,8 +192,11 @@ esp_err_t aiqa_audio_capture_hw_stop(void)
     if (s_codec == NULL || !s_started) {
         return ESP_OK;
     }
-    s_started = false;
-    return codec_status_to_esp(esp_codec_dev_close(s_codec));
+    const esp_err_t ret = codec_status_to_esp(esp_codec_dev_close(s_codec));
+    if (ret == ESP_OK) {
+        s_started = false;
+    }
+    return ret;
 }
 
 bool aiqa_audio_capture_hw_is_ready(void)

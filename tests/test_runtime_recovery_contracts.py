@@ -133,13 +133,8 @@ def test_local_asr_failures_use_generation_scoped_events():
     assert "aiqa_runtime_asr_failure_event(command.generation)" in malformed_command
 
 
-def test_identity_preferences_fail_closed_and_use_separate_system_context():
+def test_identity_preferences_use_cloud_route_and_separate_chat_context():
     source = RUNTIME.read_text(encoding="utf-8")
-    language_handler = _function_region(
-        source,
-        "static bool handle_language_switch_transcript",
-        "static const char *weekday_zh",
-    )
     local_handler = _function_region(
         source,
         "static bool handle_local_command_transcript",
@@ -147,43 +142,42 @@ def test_identity_preferences_fail_closed_and_use_separate_system_context():
     )
     chat_task = _function_region(source, "static void chat_task", "esp_err_t aiqa_runtime_start")
 
-    assert "aiqa_config_save_dialogue_language" in language_handler
-    language_before_publish = language_handler.split(
-        "update_snapshot_dialogue_language", maxsplit=1
-    )[0]
-    language_after_save = language_before_publish.split(
-        "aiqa_config_save_dialogue_language", maxsplit=1
-    )[1]
-    assert "if (save_ret != ESP_OK)" in language_after_save
-    assert 'set_local_reply("语言设置保存失败，请重试。")' in language_after_save
-    assert "return true;" in language_after_save
-    assert "(void)aiqa_config_save_dialogue_language" not in language_handler
-    assert "(void)aiqa_config_save_assistant_profile" not in local_handler
+    assert "AIQA_LOCAL_COMMAND_SET_NAME" not in local_handler
+    assert "AIQA_LOCAL_COMMAND_SET_GENDER" not in local_handler
+    assert "aiqa_config_save_assistant_profile" not in local_handler
+    assert "aiqa_config_save_dialogue_language" not in local_handler
 
-    name_branch = local_handler.split(
-        "if (command.type == AIQA_LOCAL_COMMAND_SET_NAME)", maxsplit=1
-    )[1].split("if (command.type == AIQA_LOCAL_COMMAND_SET_GENDER)", maxsplit=1)[0]
-    gender_branch = local_handler.split(
-        "if (command.type == AIQA_LOCAL_COMMAND_SET_GENDER)", maxsplit=1
-    )[1]
-    for branch, failure_reply in (
-        (name_branch, 'set_local_reply("名字保存失败，请重试。")'),
-        (gender_branch, 'set_local_reply("性别保存失败，请重试。")'),
-    ):
-        before_publish = branch.split("update_snapshot_profile", maxsplit=1)[0]
-        after_save = before_publish.split(
-            "aiqa_config_save_assistant_profile", maxsplit=1
-        )[1]
-        assert "if (save_ret != ESP_OK)" in after_save
-        assert failure_reply in after_save
-        assert "return true;" in after_save
+    route_call = chat_task.index("aiqa_chat_classify_device_intent_once")
+    ordinary_chat_call = chat_task.index("aiqa_chat_send_streaming_with_contexts")
+    assert route_call < ordinary_chat_call
+    assert "intent_result.intent.type != AIQA_DEVICE_INTENT_NONE" in chat_task
+    assert "aiqa_device_intent_controller_handle_pending_transcript" in chat_task
+    assert "Cloud intent classification failed closed" in chat_task
+    assert "device_intent_failure_reply(intent_result.status)" in chat_task
+    assert '"云端意图识别失败，请重试。"' not in chat_task
+    pending_branch = chat_task.split(
+        "aiqa_device_intent_controller_handle_pending_transcript", maxsplit=1
+    )[1].split("aiqa_chat_classify_device_intent_once", maxsplit=1)[0]
+    assert "if (handled)" in pending_branch
+    assert "continue;" in pending_branch
+    proposal_branch = chat_task.split(
+        "intent_result.intent.type != AIQA_DEVICE_INTENT_NONE", maxsplit=1
+    )[1].split("char prompt_snapshot", maxsplit=1)[0]
+    assert "aiqa_device_intent_controller_handle_cloud_intent" in proposal_branch
+    assert "continue;" in proposal_branch
+    unsupported_branch = chat_task.split(
+        "!chat_caps->supports_device_intent_route", maxsplit=1
+    )[1].split("aiqa_chat_classify_device_intent_once", maxsplit=1)[0]
+    assert "continue;" in unsupported_branch
+    assert chat_task.count("lock_current_interaction(command.generation)") >= 2
+    assert chat_task.count("unlock_current_interaction()") >= 2
 
     assert "aiqa_chat_send_streaming_with_contexts" in chat_task
     assert "aiqa_chat_send_once_with_contexts" in chat_task
     assert "config_snapshot.user_prefs.dialogue_language" in chat_task
     for call_name in (
-        "aiqa_chat_send_streaming_with_contexts(",
-        "aiqa_chat_send_once_with_contexts(",
+        "aiqa_chat_send_streaming_with_contexts_epoch(",
+        "aiqa_chat_send_once_with_contexts_epoch(",
     ):
         call = chat_task.split(call_name, maxsplit=1)[1].split(");", maxsplit=1)[0]
         conversation_argument = "has_conversation_context ? conversation_memory : NULL"

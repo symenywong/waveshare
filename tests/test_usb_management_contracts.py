@@ -10,8 +10,9 @@ class UsbManagementContractTests(unittest.TestCase):
         defaults = (ROOT / "sdkconfig.defaults").read_text()
         generated = (ROOT / "sdkconfig").read_text()
 
-        self.assertIn("CONFIG_ESP_CONSOLE_UART_DEFAULT=y", defaults)
+        self.assertIn("CONFIG_ESP_CONSOLE_NONE=y", defaults)
         self.assertIn("CONFIG_ESP_CONSOLE_SECONDARY_NONE=y", defaults)
+        self.assertNotIn("CONFIG_ESP_CONSOLE_UART_DEFAULT=y", generated)
         self.assertNotIn("CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y", generated)
         self.assertIn("CONFIG_ESP_CONSOLE_SECONDARY_NONE=y", generated)
 
@@ -39,6 +40,17 @@ class UsbManagementContractTests(unittest.TestCase):
         self.assertIn("usb_serial_jtag_wait_tx_done", source)
         self.assertNotIn("aiqa_tinyusb_cdc_link", source)
         self.assertNotIn("tinyusb_", source)
+
+    def test_zero_byte_usb_reads_yield_to_runtime_startup(self):
+        source = (
+            ROOT / "components/management_transport/src/aiqa_usb_management.c"
+        ).read_text()
+        zero_read = source.split("if (bytes_read == 0U)", maxsplit=1)[1].split(
+            "if (!link_epoch_is_current", maxsplit=1
+        )[0]
+
+        self.assertIn("vTaskDelay", zero_read)
+        self.assertIn("#define AIQA_USB_TASK_PRIORITY 0U", source)
 
     def test_transport_owns_pairing_and_authenticated_protocol_gates(self):
         source = (

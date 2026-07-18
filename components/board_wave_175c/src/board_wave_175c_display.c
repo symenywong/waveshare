@@ -13,6 +13,7 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -25,6 +26,12 @@ static const char *TAG = "board_175c_display";
 #define WAVE_175C_LCD_HOST SPI2_HOST
 #define WAVE_175C_LCD_QSPI_QUEUE_DEPTH 10
 #define WAVE_175C_LCD_FLUSH_TIMEOUT_MS 2000
+#define LCD_FLUSH_MAX_CONSECUTIVE_TIMEOUTS 2u
+#define WAVE_175C_LCD_DMA_BUFFER_ROWS (BOARD_WAVE_175C_FONT_HEIGHT * 4)
+#define WAVE_175C_LCD_DMA_BUFFER_PIXELS \
+    (WAVE_175C_LCD_WIDTH * WAVE_175C_LCD_DMA_BUFFER_ROWS)
+#define WAVE_175C_PET_CELL_COUNT \
+    (BOARD_WAVE_175C_PET_SPRITE_WIDTH * BOARD_WAVE_175C_PET_SPRITE_HEIGHT)
 #define WAVE_175C_LCD_MAX_TRANSFER_BYTES \
     (WAVE_175C_LCD_WIDTH * WAVE_175C_LCD_HEIGHT * WAVE_175C_LCD_BITS_PER_PIXEL / 8)
 #define RGB565_BLACK 0x0000
@@ -33,10 +40,19 @@ static const char *TAG = "board_175c_display";
 #define RGB565_PET_MUTED 0x8410
 #define RGB565_PET_WARNING 0xFD20
 
+_Static_assert(WAVE_175C_LCD_DMA_BUFFER_ROWS >= WAVE_175C_LCD_TRANSFER_ROWS,
+               "LCD DMA buffer must cover the largest transfer stripe");
+_Static_assert(WAVE_175C_LCD_DMA_BUFFER_ROWS >= BOARD_WAVE_175C_FONT_HEIGHT * 4,
+               "LCD DMA buffer must cover the largest supported font scale");
+
 static esp_lcd_panel_handle_t s_lcd_panel;
 static esp_lcd_panel_io_handle_t s_lcd_io;
 static SemaphoreHandle_t s_lcd_flush_done;
 static bool s_lcd_ready;
+static bool s_lcd_flush_pending;
+static uint8_t s_lcd_consecutive_timeouts;
+static uint16_t *s_lcd_dma_buffer;
+static uint16_t *s_pet_cells;
 static size_t s_pet_animation_frame;
 
 // Matches the Waveshare ESP32-S3-Touch-AMOLED-1.75 BSP CO5300 init sequence.
@@ -280,13 +296,48 @@ static size_t display_text_len(const char *text)
 
 static esp_err_t wait_for_lcd_flush(void)
 {
-    if (s_lcd_flush_done == NULL) {
+    if (s_lcd_flush_done == NULL || !s_lcd_flush_pending) {
         return ESP_ERR_INVALID_STATE;
     }
     if (xSemaphoreTake(s_lcd_flush_done, pdMS_TO_TICKS(WAVE_175C_LCD_FLUSH_TIMEOUT_MS)) != pdTRUE) {
+        ++s_lcd_consecutive_timeouts;
+        ESP_LOGE(TAG,
+                 "LCD DMA completion timeout (%u/%u)",
+                 (unsigned)s_lcd_consecutive_timeouts,
+                 (unsigned)LCD_FLUSH_MAX_CONSECUTIVE_TIMEOUTS);
+        if (s_lcd_consecutive_timeouts >= LCD_FLUSH_MAX_CONSECUTIVE_TIMEOUTS) {
+            ESP_LOGE(TAG, "LCD DMA did not quiesce; restarting to avoid permanent stale UI");
+            esp_restart();
+        }
         return ESP_ERR_TIMEOUT;
     }
+    s_lcd_consecutive_timeouts = 0;
+    s_lcd_flush_pending = false;
     return ESP_OK;
+}
+
+static esp_err_t wait_for_lcd_idle(void)
+{
+    return s_lcd_flush_pending ? wait_for_lcd_flush() : ESP_OK;
+}
+
+static esp_err_t display_submit_bitmap(
+    int x_start,
+    int y_start,
+    int x_end,
+    int y_end,
+    const void *pixels)
+{
+    while (xSemaphoreTake(s_lcd_flush_done, 0) == pdTRUE) {
+    }
+    s_lcd_flush_pending = true;
+    esp_err_t ret = esp_lcd_panel_draw_bitmap(
+        s_lcd_panel, x_start, y_start, x_end, y_end, pixels);
+    if (ret != ESP_OK) {
+        s_lcd_flush_pending = false;
+        return ret;
+    }
+    return wait_for_lcd_flush();
 }
 
 static esp_err_t display_draw_solid_rect(int x_start, int y_start, int x_end, int y_end, uint16_t color)
@@ -298,17 +349,13 @@ static esp_err_t display_draw_solid_rect(int x_start, int y_start, int x_end, in
         x_end > WAVE_175C_LCD_WIDTH || y_end > WAVE_175C_LCD_HEIGHT) {
         return ESP_ERR_INVALID_ARG;
     }
+    ESP_RETURN_ON_ERROR(wait_for_lcd_idle(), TAG, "previous LCD transfer incomplete");
 
     const int width = x_end - x_start;
     const int chunk_rows = WAVE_175C_LCD_TRANSFER_ROWS;
     const size_t chunk_pixels = (size_t)width * chunk_rows;
-    uint16_t *buffer = (uint16_t *)heap_caps_malloc(chunk_pixels * sizeof(uint16_t),
-                                                    MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    if (buffer == NULL) {
-        buffer = (uint16_t *)heap_caps_malloc(chunk_pixels * sizeof(uint16_t), MALLOC_CAP_DMA);
-    }
-    if (buffer == NULL) {
-        return ESP_ERR_NO_MEM;
+    if (s_lcd_dma_buffer == NULL || chunk_pixels > WAVE_175C_LCD_DMA_BUFFER_PIXELS) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     esp_err_t ret = ESP_OK;
@@ -317,20 +364,16 @@ static esp_err_t display_draw_solid_rect(int x_start, int y_start, int x_end, in
         const int rows = (y + chunk_rows <= y_end) ? chunk_rows : (y_end - y);
         const size_t pixels = (size_t)width * rows;
         for (size_t i = 0; i < pixels; ++i) {
-            buffer[i] = panel_color;
+            s_lcd_dma_buffer[i] = panel_color;
         }
 
-        ret = esp_lcd_panel_draw_bitmap(s_lcd_panel, x_start, y, x_end, y + rows, buffer);
-        if (ret != ESP_OK) {
-            break;
-        }
-        ret = wait_for_lcd_flush();
+        ret = display_submit_bitmap(
+            x_start, y, x_end, y + rows, s_lcd_dma_buffer);
         if (ret != ESP_OK) {
             break;
         }
     }
 
-    free(buffer);
     return ret;
 }
 
@@ -348,6 +391,7 @@ static esp_err_t display_draw_text_line(
     if (text == NULL || scale <= 0 || x < 0 || y < 0 || x >= WAVE_175C_LCD_WIDTH || y >= WAVE_175C_LCD_HEIGHT) {
         return ESP_ERR_INVALID_ARG;
     }
+    ESP_RETURN_ON_ERROR(wait_for_lcd_idle(), TAG, "previous LCD transfer incomplete");
 
     size_t char_count = display_text_len(text);
     const int char_stride = (BOARD_WAVE_175C_FONT_WIDTH + BOARD_WAVE_175C_FONT_SPACING) * scale;
@@ -368,19 +412,15 @@ static esp_err_t display_draw_text_line(
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint16_t *buffer = (uint16_t *)heap_caps_malloc((size_t)width * height * sizeof(uint16_t),
-                                                    MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    if (buffer == NULL) {
-        buffer = (uint16_t *)heap_caps_malloc((size_t)width * height * sizeof(uint16_t), MALLOC_CAP_DMA);
-    }
-    if (buffer == NULL) {
-        return ESP_ERR_NO_MEM;
+    const size_t pixels = (size_t)width * height;
+    if (s_lcd_dma_buffer == NULL || pixels > WAVE_175C_LCD_DMA_BUFFER_PIXELS) {
+        return ESP_ERR_INVALID_SIZE;
     }
 
     const uint16_t bg = rgb565_to_panel_wire(background);
     const uint16_t fg = rgb565_to_panel_wire(foreground);
-    for (size_t i = 0; i < (size_t)width * height; ++i) {
-        buffer[i] = bg;
+    for (size_t i = 0; i < pixels; ++i) {
+        s_lcd_dma_buffer[i] = bg;
     }
 
     for (size_t char_index = 0; char_index < char_count; ++char_index) {
@@ -395,20 +435,15 @@ static esp_err_t display_draw_text_line(
                     const int pixel_y = row * scale + sy;
                     for (int sx = 0; sx < scale; ++sx) {
                         const int pixel_x = char_x + col * scale + sx;
-                        buffer[(size_t)pixel_y * width + pixel_x] = fg;
+                    s_lcd_dma_buffer[(size_t)pixel_y * width + pixel_x] = fg;
                     }
                 }
             }
         }
     }
 
-    esp_err_t ret = esp_lcd_panel_draw_bitmap(s_lcd_panel, x, y, x + width, y + height, buffer);
-    if (ret == ESP_OK) {
-        ret = wait_for_lcd_flush();
-    }
-
-    free(buffer);
-    return ret;
+    return display_submit_bitmap(
+        x, y, x + width, y + height, s_lcd_dma_buffer);
 }
 
 static esp_err_t display_draw_centered_text_line(
@@ -428,6 +463,7 @@ static esp_err_t display_draw_centered_text_line(
 static esp_err_t display_draw_pet_expression(board_wave_175c_pet_expression_t expression, uint16_t accent)
 {
     (void)accent;
+    ESP_RETURN_ON_ERROR(wait_for_lcd_idle(), TAG, "previous LCD transfer incomplete");
 
     const board_wave_175c_pet_sprite_t *sprite = board_wave_175c_pet_sprite_for_expression(expression);
     board_wave_175c_display_rect_t rect = {0};
@@ -435,36 +471,20 @@ static esp_err_t display_draw_pet_expression(board_wave_175c_pet_expression_t ex
         return ESP_ERR_INVALID_ARG;
     }
 
-    const size_t cell_count = BOARD_WAVE_175C_PET_SPRITE_WIDTH * BOARD_WAVE_175C_PET_SPRITE_HEIGHT;
-    uint16_t *cells = (uint16_t *)heap_caps_calloc(cell_count,
-                                                   sizeof(uint16_t),
-                                                   MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (cells == NULL) {
-        cells = (uint16_t *)heap_caps_calloc(cell_count,
-                                            sizeof(uint16_t),
-                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    }
-    if (cells == NULL) {
-        return ESP_ERR_NO_MEM;
+    if (s_pet_cells == NULL || s_lcd_dma_buffer == NULL) {
+        return ESP_ERR_INVALID_STATE;
     }
     if (!board_wave_175c_pet_sprite_render(sprite,
                                            s_pet_animation_frame++,
-                                           cells,
-                                           cell_count)) {
-        free(cells);
+                                           s_pet_cells,
+                                           WAVE_175C_PET_CELL_COUNT)) {
         return ESP_ERR_INVALID_ARG;
     }
 
     const int chunk_rows = WAVE_175C_LCD_TRANSFER_ROWS;
     const size_t chunk_pixels = (size_t)rect.width * (size_t)chunk_rows;
-    uint16_t *buffer = (uint16_t *)heap_caps_malloc(chunk_pixels * sizeof(uint16_t),
-                                                    MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    if (buffer == NULL) {
-        buffer = (uint16_t *)heap_caps_malloc(chunk_pixels * sizeof(uint16_t), MALLOC_CAP_DMA);
-    }
-    if (buffer == NULL) {
-        free(cells);
-        return ESP_ERR_NO_MEM;
+    if (chunk_pixels > WAVE_175C_LCD_DMA_BUFFER_PIXELS) {
+        return ESP_ERR_INVALID_SIZE;
     }
 
     const uint16_t bg = rgb565_to_panel_wire(RGB565_PET_BG);
@@ -475,29 +495,22 @@ static esp_err_t display_draw_pet_expression(board_wave_175c_pet_expression_t ex
             const int src_y = (y_offset + row) / sprite->scale;
             for (int col = 0; col < rect.width; ++col) {
                 const int src_x = col / sprite->scale;
-                uint16_t color = cells[(size_t)src_y * sprite->width + (size_t)src_x];
-                buffer[(size_t)row * rect.width + (size_t)col] =
+                uint16_t color = s_pet_cells[(size_t)src_y * sprite->width + (size_t)src_x];
+                s_lcd_dma_buffer[(size_t)row * rect.width + (size_t)col] =
                     color == 0 ? bg : rgb565_to_panel_wire(color);
             }
         }
 
-        ret = esp_lcd_panel_draw_bitmap(s_lcd_panel,
-                                        rect.x,
-                                        rect.y + y_offset,
-                                        rect.x + rect.width,
-                                        rect.y + y_offset + rows,
-                                        buffer);
-        if (ret != ESP_OK) {
-            break;
-        }
-        ret = wait_for_lcd_flush();
+        ret = display_submit_bitmap(rect.x,
+                                    rect.y + y_offset,
+                                    rect.x + rect.width,
+                                    rect.y + y_offset + rows,
+                                    s_lcd_dma_buffer);
         if (ret != ESP_OK) {
             break;
         }
     }
 
-    free(buffer);
-    free(cells);
     return ret;
 }
 
@@ -506,14 +519,35 @@ esp_err_t board_wave_175c_display_init(void)
     if (s_lcd_ready) {
         return ESP_OK;
     }
+    bool spi_bus_ready = false;
+    esp_err_t ret = ESP_OK;
 
     s_lcd_flush_done = xSemaphoreCreateBinary();
     if (s_lcd_flush_done == NULL) {
         return ESP_ERR_NO_MEM;
     }
-
-    bool spi_bus_ready = false;
-    esp_err_t ret = ESP_OK;
+    s_lcd_dma_buffer = (uint16_t *)heap_caps_malloc(
+        WAVE_175C_LCD_DMA_BUFFER_PIXELS * sizeof(uint16_t),
+        MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (s_lcd_dma_buffer == NULL) {
+        s_lcd_dma_buffer = (uint16_t *)heap_caps_malloc(
+            WAVE_175C_LCD_DMA_BUFFER_PIXELS * sizeof(uint16_t),
+            MALLOC_CAP_DMA);
+    }
+    s_pet_cells = (uint16_t *)heap_caps_calloc(
+        WAVE_175C_PET_CELL_COUNT,
+        sizeof(uint16_t),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_pet_cells == NULL) {
+        s_pet_cells = (uint16_t *)heap_caps_calloc(
+            WAVE_175C_PET_CELL_COUNT,
+            sizeof(uint16_t),
+            MALLOC_CAP_8BIT);
+    }
+    if (s_lcd_dma_buffer == NULL || s_pet_cells == NULL) {
+        ret = ESP_ERR_NO_MEM;
+        goto fail;
+    }
 
     ESP_LOGI(TAG, "Initialize CO5300 AMOLED over QSPI: CS=%d SCLK=%d D0=%d D1=%d D2=%d D3=%d RST=%d",
              WAVE_175C_LCD_CS,
@@ -598,6 +632,12 @@ fail:
         vSemaphoreDelete(s_lcd_flush_done);
         s_lcd_flush_done = NULL;
     }
+    free(s_lcd_dma_buffer);
+    s_lcd_dma_buffer = NULL;
+    free(s_pet_cells);
+    s_pet_cells = NULL;
+    s_lcd_flush_pending = false;
+    s_lcd_consecutive_timeouts = 0;
     s_lcd_ready = false;
     return ret;
 }

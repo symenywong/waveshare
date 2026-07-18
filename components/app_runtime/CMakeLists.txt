@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "src/aiqa_runtime.c"
+        "src/aiqa_device_intent_controller.c"
         "src/aiqa_runtime_events.c"
         "src/aiqa_runtime_recording.c"
         "src/aiqa_runtime_ui.c"

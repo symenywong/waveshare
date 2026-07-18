@@ -716,11 +716,34 @@ class CContractTests(unittest.TestCase):
                     assert(aiqa_local_command_parse("今天日期", &command));
                     assert(command.type == AIQA_LOCAL_COMMAND_DATE_QUERY);
 
+                    assert(aiqa_local_command_parse("请问现在几点？", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_TIME_QUERY);
+                    assert(aiqa_local_command_parse("当前时间是多少?", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_TIME_QUERY);
+                    assert(aiqa_local_command_parse("今天是几月几号？", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_DATE_QUERY);
+                    assert(aiqa_local_command_parse("今天周几？", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_WEEKDAY_QUERY);
+                    assert(aiqa_local_command_parse("现在日期和时间是多少？", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_DATETIME_QUERY);
+
                     assert(aiqa_local_command_parse("现在几点", &command));
                     assert(command.type == AIQA_LOCAL_COMMAND_TIME_QUERY);
 
                     assert(aiqa_local_command_parse("星期几", &command));
                     assert(command.type == AIQA_LOCAL_COMMAND_WEEKDAY_QUERY);
+
+                    assert(!aiqa_local_command_parse("讲讲如何提高音量", &command));
+                    assert(!aiqa_local_command_parse("讲一个今天的故事", &command));
+                    assert(!aiqa_local_command_parse("介绍一下时间管理", &command));
+                    assert(!aiqa_local_command_parse("讲讲日期格式", &command));
+                    assert(!aiqa_local_command_parse("现在几点适合睡觉", &command));
+                    assert(!aiqa_local_command_parse("请问静音？", &command));
+                    assert(!aiqa_local_command_parse("请问音量调大一点？", &command));
+                    assert(aiqa_local_command_parse("你的名字叫今天", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_SET_NAME);
+                    assert(aiqa_local_command_parse("你的名字叫电量", &command));
+                    assert(command.type == AIQA_LOCAL_COMMAND_SET_NAME);
 
                     assert(aiqa_local_command_parse("你叫小智", &command));
                     assert(command.type == AIQA_LOCAL_COMMAND_SET_NAME);
@@ -785,6 +808,92 @@ class CContractTests(unittest.TestCase):
                 "components/app_core/src/aiqa_local_command.c",
                 "components/app_core/src/aiqa_assistant_profile.c",
             ],
+            ["components/app_core/include"],
+        )
+
+    def test_local_datetime_formats_deterministic_spoken_replies_and_context(self):
+        self.compile_and_run(
+            textwrap.dedent(
+                """
+                #include "aiqa_datetime.h"
+                #include <assert.h>
+                #include <string.h>
+
+                int main(void) {
+                    const struct tm local_time = {
+                        .tm_year = 126,
+                        .tm_mon = 6,
+                        .tm_mday = 19,
+                        .tm_hour = 15,
+                        .tm_min = 30,
+                        .tm_sec = 45,
+                        .tm_wday = 0,
+                    };
+                    char reply[160] = {0};
+
+                    assert(aiqa_datetime_format_local_reply(
+                        AIQA_LOCAL_COMMAND_DATE_QUERY,
+                        &local_time,
+                        reply,
+                        sizeof(reply)));
+                    assert(strcmp(reply, "今天是2026年7月19日，星期日。") == 0);
+
+                    assert(aiqa_datetime_format_local_reply(
+                        AIQA_LOCAL_COMMAND_TIME_QUERY,
+                        &local_time,
+                        reply,
+                        sizeof(reply)));
+                    assert(strcmp(reply, "现在是15:30。") == 0);
+
+                    assert(aiqa_datetime_format_local_reply(
+                        AIQA_LOCAL_COMMAND_WEEKDAY_QUERY,
+                        &local_time,
+                        reply,
+                        sizeof(reply)));
+                    assert(strcmp(reply, "今天是星期日。") == 0);
+
+                    assert(aiqa_datetime_format_local_reply(
+                        AIQA_LOCAL_COMMAND_DATETIME_QUERY,
+                        &local_time,
+                        reply,
+                        sizeof(reply)));
+                    assert(strcmp(reply, "现在是2026年7月19日，星期日，15:30。") == 0);
+
+                    char trusted_context[192] = {0};
+                    assert(aiqa_datetime_format_trusted_context(
+                        &local_time,
+                        trusted_context,
+                        sizeof(trusted_context)));
+                    assert(strstr(trusted_context, "2026-07-19T15:30:45+08:00") != 0);
+                    assert(strstr(trusted_context, "Asia/Shanghai") != 0);
+                    assert(strstr(trusted_context, "SNTP") != 0);
+
+                    char too_small[8] = "dirty";
+                    assert(!aiqa_datetime_format_local_reply(
+                        AIQA_LOCAL_COMMAND_DATETIME_QUERY,
+                        &local_time,
+                        too_small,
+                        sizeof(too_small)));
+                    assert(too_small[0] == '\0');
+
+                    struct tm invalid_time = local_time;
+                    invalid_time.tm_mon = 12;
+                    assert(!aiqa_datetime_format_local_reply(
+                        AIQA_LOCAL_COMMAND_DATE_QUERY,
+                        &invalid_time,
+                        reply,
+                        sizeof(reply)));
+                    invalid_time = local_time;
+                    invalid_time.tm_hour = 24;
+                    assert(!aiqa_datetime_format_trusted_context(
+                        &invalid_time,
+                        trusted_context,
+                        sizeof(trusted_context)));
+                    return 0;
+                }
+                """
+            ),
+            ["components/app_core/src/aiqa_datetime.c"],
             ["components/app_core/include"],
         )
 
@@ -947,7 +1056,7 @@ class CContractTests(unittest.TestCase):
                     assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_CRYING);
 
                     page = aiqa_runtime_ui_page_for(AIQA_STATE_ERROR, AIQA_ERROR_ASR_FAILED);
-                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_SAD);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS);
 
                     page = aiqa_runtime_ui_page_for(AIQA_STATE_ERROR, AIQA_ERROR_TIMEOUT);
                     assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_FRUSTRATED);
@@ -980,9 +1089,11 @@ class CContractTests(unittest.TestCase):
                 int main(void) {
                     board_wave_175c_display_page_t page =
                         aiqa_runtime_ui_page_for(AIQA_STATE_ERROR, AIQA_ERROR_ASR_FAILED);
-                    assert(strcmp(page.status, "ASR") == 0);
+                    assert(strcmp(page.status, "VOICE ERR") == 0);
+                    assert(strcmp(page.detail, "RETRY") == 0);
                     assert(strcmp(page.hint, "RETRY") == 0);
                     assert(page.is_error);
+                    assert(page.expression == BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS);
 
                     page = aiqa_runtime_ui_page_for(AIQA_STATE_ERROR, AIQA_ERROR_CONFIG_MISSING);
                     assert(strcmp(page.status, "SETUP") == 0);
@@ -1014,7 +1125,9 @@ class CContractTests(unittest.TestCase):
                     assert(caps != 0);
                     assert(caps->supports_chat_stream);
                     assert(caps->supports_reasoning_controls);
+                    assert(caps->supports_device_intent_route);
                     assert(aiqa_provider_is_known(AIQA_PROVIDER_MINIMAX_CHAT));
+                    assert(!aiqa_provider_caps_for(AIQA_PROVIDER_MINIMAX_CHAT)->supports_device_intent_route);
                     assert(aiqa_provider_caps_for("unknown") == 0);
                     return 0;
                 }
@@ -1035,10 +1148,20 @@ class CContractTests(unittest.TestCase):
 
                 int main(void) {
                     aiqa_config_t config = aiqa_config_default();
+                    const struct tm trusted_local_time = {
+                        .tm_year = 126,
+                        .tm_mon = 6,
+                        .tm_mday = 19,
+                        .tm_hour = 15,
+                        .tm_min = 30,
+                        .tm_sec = 45,
+                        .tm_wday = 0,
+                    };
                     aiqa_chat_options_t options = {
                         .stream = false,
                         .hide_reasoning = true,
                         .max_completion_tokens = 96,
+                        .trusted_local_time = &trusted_local_time,
                     };
 
                     char url[AIQA_CHAT_ENDPOINT_MAX_LEN] = {0};
@@ -1061,6 +1184,11 @@ class CContractTests(unittest.TestCase):
                     assert(strstr(body, "\\"role\\":\\"system\\"") != 0);
                     assert(strstr(body, "personal voice assistant") != 0);
                     assert(strstr(body, "Do not call the user") != 0);
+                    assert(strstr(body, "2026-07-19T15:30:45+08:00") != 0);
+                    assert(strstr(body, "timezone=Asia/Shanghai") != 0);
+                    assert(strstr(body, "source=SNTP") != 0);
+                    assert(strstr(body, "2026-07-19T15:30:45+08:00") <
+                           strstr(body, "Hello"));
                     assert(strstr(body, "AI electronic pet") == 0);
                     assert(strstr(body, "主人") == 0);
                     assert(strstr(body, "\\"stream\\":false") != 0);
@@ -1090,11 +1218,13 @@ class CContractTests(unittest.TestCase):
             ),
             [
                 "components/chat_client/src/aiqa_chat_protocol.c",
+                "components/app_core/src/aiqa_datetime.c",
                 "components/config_store/src/aiqa_config.c",
                 "components/provider_common/src/aiqa_provider.c",
             ],
             [
                 "components/chat_client/include",
+                "components/app_core/include",
                 "components/config_store/include",
                 "components/provider_common/include",
             ],
@@ -1183,6 +1313,7 @@ class CContractTests(unittest.TestCase):
             ),
             [
                 "components/chat_client/src/aiqa_chat_protocol.c",
+                "components/app_core/src/aiqa_datetime.c",
                 "components/app_core/src/aiqa_language.c",
                 "components/config_store/src/aiqa_config.c",
                 "components/provider_common/src/aiqa_provider.c",
@@ -1285,11 +1416,13 @@ class CContractTests(unittest.TestCase):
             ),
             [
                 "components/chat_client/src/aiqa_chat_protocol.c",
+                "components/app_core/src/aiqa_datetime.c",
                 "components/config_store/src/aiqa_config.c",
                 "components/provider_common/src/aiqa_provider.c",
             ],
             [
                 "components/chat_client/include",
+                "components/app_core/include",
                 "components/config_store/include",
                 "components/provider_common/include",
             ],
@@ -2533,6 +2666,7 @@ class CContractTests(unittest.TestCase):
                 """
                 #include "aiqa_net_policy.h"
                 #include <assert.h>
+                #include <string.h>
 
                 int main(void) {
                     aiqa_net_policy_t policy = aiqa_net_default_policy();
@@ -2540,6 +2674,7 @@ class CContractTests(unittest.TestCase):
                     assert(policy.sntp_timeout_ms >= 5000);
                     assert(policy.max_wifi_retries >= 3);
                     assert(policy.sntp_server != 0);
+                    assert(strcmp(AIQA_NET_DEFAULT_TIMEZONE, "CST-8") == 0);
 
                     assert(!aiqa_net_time_is_valid(0));
                     assert(!aiqa_net_time_is_valid(1600000000));

@@ -29,6 +29,13 @@ typedef struct {
         uint32_t *out_operation_id);
 } aiqa_management_protocol_ports_t;
 
+typedef struct {
+    void *context;
+    bool (*copy_diagnostics)(
+        void *context,
+        aiqa_management_public_diagnostics_t *out_diagnostics);
+} aiqa_management_public_protocol_ports_t;
+
 /*
  * Handles the deliberately small, unauthenticated protocol surface.
  * A true return value means a response (success or rejection) was produced.
@@ -36,6 +43,14 @@ typedef struct {
 bool aiqa_management_protocol_handle_public_request(
     const uint8_t *payload,
     size_t payload_length,
+    char *out_response,
+    size_t response_capacity,
+    size_t *out_response_length);
+
+bool aiqa_management_protocol_handle_public_request_with_ports(
+    const uint8_t *payload,
+    size_t payload_length,
+    const aiqa_management_public_protocol_ports_t *ports,
     char *out_response,
     size_t response_capacity,
     size_t *out_response_length);

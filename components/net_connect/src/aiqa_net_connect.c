@@ -12,6 +12,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdatomic.h>
 #include <time.h>
 
@@ -29,6 +30,12 @@ static bool s_wifi_initialized;
 static atomic_bool s_wifi_should_retry = ATOMIC_VAR_INIT(false);
 static atomic_uchar s_wifi_retry_count = ATOMIC_VAR_INIT(0);
 static atomic_uchar s_wifi_max_retries = ATOMIC_VAR_INIT(0);
+static atomic_bool s_time_synchronized = ATOMIC_VAR_INIT(false);
+
+bool aiqa_net_time_is_synchronized(void)
+{
+    return atomic_load_explicit(&s_time_synchronized, memory_order_acquire);
+}
 
 static esp_err_t ok_if_already_initialized(esp_err_t ret)
 {
@@ -273,12 +280,11 @@ static esp_err_t connect_wifi_with_policy(
 
 static esp_err_t sync_time_with_policy(const aiqa_net_policy_t *policy)
 {
-    time_t now = 0;
-    time(&now);
-    if (aiqa_net_time_is_valid(now)) {
-        ESP_LOGI(TAG, "System time already valid");
-        return ESP_OK;
+    if (setenv("TZ", AIQA_NET_DEFAULT_TIMEZONE, 1) != 0) {
+        ESP_LOGE(TAG, "Failed to configure local timezone");
+        return ESP_FAIL;
     }
+    tzset();
 
     esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(policy->sntp_server);
     esp_err_t ret = esp_netif_sntp_init(&config);
@@ -292,12 +298,14 @@ static esp_err_t sync_time_with_policy(const aiqa_net_policy_t *policy)
         return ret;
     }
 
+    time_t now = 0;
     time(&now);
     if (!aiqa_net_time_is_valid(now)) {
         ESP_LOGE(TAG, "SNTP completed but time is still invalid");
         return ESP_ERR_INVALID_STATE;
     }
 
+    atomic_store_explicit(&s_time_synchronized, true, memory_order_release);
     ESP_LOGI(TAG, "System time synchronized");
     return ESP_OK;
 }

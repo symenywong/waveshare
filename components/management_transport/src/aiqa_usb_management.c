@@ -24,7 +24,7 @@
 #define AIQA_USB_RX_DRIVER_BUFFER_SIZE 4096U
 #define AIQA_USB_TX_DRIVER_BUFFER_SIZE 4096U
 #define AIQA_USB_TASK_STACK_SIZE 7168U
-#define AIQA_USB_TASK_PRIORITY 5U
+#define AIQA_USB_TASK_PRIORITY 0U
 #define AIQA_USB_REQUESTS_PER_SECOND 10U
 #define AIQA_USB_RX_BYTES_PER_SECOND 12288U
 #define AIQA_USB_WARNINGS_PER_SECOND 1U
@@ -287,6 +287,14 @@ static void handle_secure_request(
     }
 }
 
+static bool copy_public_diagnostics(
+    void *context,
+    aiqa_management_public_diagnostics_t *out_diagnostics)
+{
+    (void)context;
+    return aiqa_runtime_management_copy_public_diagnostics(out_diagnostics);
+}
+
 static void handle_public_request(
     aiqa_usb_owner_t *owner,
     aiqa_management_wire_kind_t kind,
@@ -308,9 +316,14 @@ static void handle_public_request(
                         &response_length,
                         &requires_tx_confirmation);
     if (!produced) {
-        produced = aiqa_management_protocol_handle_public_request(
+        const aiqa_management_public_protocol_ports_t public_ports = {
+            .context = NULL,
+            .copy_diagnostics = copy_public_diagnostics,
+        };
+        produced = aiqa_management_protocol_handle_public_request_with_ports(
             payload,
             payload_length,
+            &public_ports,
             response,
             sizeof(owner->plaintext),
             &response_length);
@@ -400,7 +413,10 @@ static void management_task(void *argument)
         const int read = usb_serial_jtag_read_bytes(
             input, sizeof(input), pdMS_TO_TICKS(50));
         const size_t bytes_read = read > 0 ? (size_t)read : 0U;
-        if (bytes_read == 0U) continue;
+        if (bytes_read == 0U) {
+            vTaskDelay(1U);
+            continue;
+        }
         if (!link_epoch_is_current(owner) ||
             owner->link_generation != read_generation) {
             secure_zero(input, bytes_read);

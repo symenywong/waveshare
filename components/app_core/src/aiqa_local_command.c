@@ -1,7 +1,5 @@
 #include "aiqa_local_command.h"
 
-#include <ctype.h>
-#include <stdlib.h>
 #include <string.h>
 
 static bool contains(const char *text, const char *needle)
@@ -18,20 +16,6 @@ uint8_t aiqa_local_command_clamp_volume(int volume_percent)
         return 100;
     }
     return (uint8_t)volume_percent;
-}
-
-static bool parse_first_int(const char *text, int *out_value)
-{
-    if (text == NULL || out_value == NULL) {
-        return false;
-    }
-    for (const char *cursor = text; *cursor != '\0'; ++cursor) {
-        if (*cursor >= '0' && *cursor <= '9') {
-            *out_value = atoi(cursor);
-            return true;
-        }
-    }
-    return false;
 }
 
 static void skip_ascii_spaces(const char **cursor)
@@ -84,6 +68,39 @@ static void trim_name_end(const char *start, size_t *length)
         }
         break;
     }
+}
+
+static void trim_command_end(const char *start, size_t *length)
+{
+    trim_name_end(start, length);
+    while (*length > 0U) {
+        const unsigned char last = (unsigned char)start[*length - 1U];
+        if (last == '?' || last == ';') {
+            *length -= 1U;
+        } else if (has_suffix(start, *length, "？") ||
+                   has_suffix(start, *length, "；")) {
+            *length -= 3U;
+        } else {
+            break;
+        }
+        trim_name_end(start, length);
+    }
+}
+
+static const char *skip_command_prefix(const char *transcript)
+{
+    static const char *const PREFIXES[] = {
+        "麻烦告诉我", "请告诉我", "请问", "告诉我", "请",
+    };
+    for (size_t index = 0U; index < sizeof(PREFIXES) / sizeof(PREFIXES[0]); ++index) {
+        const size_t prefix_length = strlen(PREFIXES[index]);
+        if (strncmp(transcript, PREFIXES[index], prefix_length) == 0) {
+            const char *start = transcript + prefix_length;
+            skip_ascii_spaces(&start);
+            return start;
+        }
+    }
+    return transcript;
 }
 
 static bool unquoted_name_shape_is_clear(const char *name, size_t name_len)
@@ -175,6 +192,59 @@ static bool command_equals(const char *transcript, const char *expected)
     return length == strlen(expected) && memcmp(start, expected, length) == 0;
 }
 
+static bool query_equals(const char *transcript, const char *expected)
+{
+    const char *start = skip_command_prefix(transcript);
+    size_t length = strlen(start);
+    trim_command_end(start, &length);
+    return length == strlen(expected) && memcmp(start, expected, length) == 0;
+}
+
+static bool parse_volume_set_command(const char *transcript, int *out_value)
+{
+    static const char *const PREFIXES[] = {
+        "音量调到", "把音量调到", "设置音量为", "音量设置为",
+    };
+    const char *start = transcript;
+    if (strncmp(start, "请", 3) == 0) {
+        start += 3;
+        skip_ascii_spaces(&start);
+    }
+    size_t length = strlen(start);
+    trim_name_end(start, &length);
+    for (size_t index = 0U; index < sizeof(PREFIXES) / sizeof(PREFIXES[0]); ++index) {
+        const size_t prefix_length = strlen(PREFIXES[index]);
+        if (length <= prefix_length || memcmp(start, PREFIXES[index], prefix_length) != 0) {
+            continue;
+        }
+        const char *cursor = start + prefix_length;
+        const char *end = start + length;
+        while (cursor < end && (*cursor == ' ' || *cursor == '\t')) {
+            cursor += 1;
+        }
+        if (cursor == end || *cursor < '0' || *cursor > '9') {
+            return false;
+        }
+        int value = 0;
+        while (cursor < end && *cursor >= '0' && *cursor <= '9') {
+            value = value * 10 + (*cursor - '0');
+            cursor += 1;
+        }
+        while (cursor < end && (*cursor == ' ' || *cursor == '\t')) {
+            cursor += 1;
+        }
+        if (cursor < end && *cursor == '%') {
+            cursor += 1;
+        }
+        if (cursor == end) {
+            *out_value = value;
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
 static bool is_female_update(const char *transcript)
 {
     return command_equals(transcript, "女声") ||
@@ -238,51 +308,66 @@ bool aiqa_local_command_parse(const char *transcript, aiqa_local_command_t *out_
     }
     *out_command = (aiqa_local_command_t){0};
 
-    if (contains(transcript, "音量") || contains(transcript, "静音")) {
-        if (contains(transcript, "当前") || contains(transcript, "多少")) {
-            out_command->type = AIQA_LOCAL_COMMAND_VOLUME_QUERY;
-            return true;
-        }
-        if (contains(transcript, "静音")) {
-            out_command->type = AIQA_LOCAL_COMMAND_VOLUME_SET;
-            out_command->value = 0;
-            return true;
-        }
-        if (contains(transcript, "调大") || contains(transcript, "大一点") ||
-            contains(transcript, "增大") || contains(transcript, "提高")) {
-            out_command->type = AIQA_LOCAL_COMMAND_VOLUME_RELATIVE;
-            out_command->value = 10;
-            return true;
-        }
-        if (contains(transcript, "调小") || contains(transcript, "小一点") ||
-            contains(transcript, "降低") || contains(transcript, "减小")) {
-            out_command->type = AIQA_LOCAL_COMMAND_VOLUME_RELATIVE;
-            out_command->value = -10;
-            return true;
-        }
-        int value = 0;
-        if (parse_first_int(transcript, &value)) {
-            out_command->type = AIQA_LOCAL_COMMAND_VOLUME_SET;
-            out_command->value = aiqa_local_command_clamp_volume(value);
-            return true;
-        }
+    if (command_equals(transcript, "当前音量是多少") ||
+        command_equals(transcript, "当前音量") || command_equals(transcript, "音量多少")) {
+        out_command->type = AIQA_LOCAL_COMMAND_VOLUME_QUERY;
+        return true;
+    }
+    if (command_equals(transcript, "静音") || command_equals(transcript, "请静音")) {
+        out_command->type = AIQA_LOCAL_COMMAND_VOLUME_SET;
+        out_command->value = 0;
+        return true;
+    }
+    if (command_equals(transcript, "音量调大一点") || command_equals(transcript, "调大音量")) {
+        out_command->type = AIQA_LOCAL_COMMAND_VOLUME_RELATIVE;
+        out_command->value = 10;
+        return true;
+    }
+    if (command_equals(transcript, "音量调小一点") || command_equals(transcript, "调小音量")) {
+        out_command->type = AIQA_LOCAL_COMMAND_VOLUME_RELATIVE;
+        out_command->value = -10;
+        return true;
+    }
+    int volume_value = 0;
+    if (parse_volume_set_command(transcript, &volume_value)) {
+        out_command->type = AIQA_LOCAL_COMMAND_VOLUME_SET;
+        out_command->value = aiqa_local_command_clamp_volume(volume_value);
+        return true;
     }
 
-    if (contains(transcript, "电量") || contains(transcript, "多少电") ||
-        contains(transcript, "充电")) {
+    if (command_equals(transcript, "现在电量多少") || command_equals(transcript, "电量多少") ||
+        command_equals(transcript, "当前电量") || command_equals(transcript, "电池电量")) {
         out_command->type = AIQA_LOCAL_COMMAND_BATTERY_QUERY;
         return true;
     }
 
-    if (contains(transcript, "星期")) {
+    if (query_equals(transcript, "现在日期和时间是多少") ||
+        query_equals(transcript, "现在的日期和时间") ||
+        query_equals(transcript, "当前日期和时间") ||
+        query_equals(transcript, "现在是几月几号几点")) {
+        out_command->type = AIQA_LOCAL_COMMAND_DATETIME_QUERY;
+        return true;
+    }
+    if (query_equals(transcript, "星期几") || query_equals(transcript, "今天星期几") ||
+        query_equals(transcript, "今天周几") || query_equals(transcript, "今天是星期几") ||
+        query_equals(transcript, "今天是周几")) {
         out_command->type = AIQA_LOCAL_COMMAND_WEEKDAY_QUERY;
         return true;
     }
-    if (contains(transcript, "几点") || contains(transcript, "现在时间")) {
+    if (query_equals(transcript, "现在几点") || query_equals(transcript, "几点了") ||
+        query_equals(transcript, "现在时间") || query_equals(transcript, "现在几点钟") ||
+        query_equals(transcript, "当前时间") || query_equals(transcript, "当前时间是多少") ||
+        query_equals(transcript, "现在是什么时间") ||
+        query_equals(transcript, "现在时间是多少")) {
         out_command->type = AIQA_LOCAL_COMMAND_TIME_QUERY;
         return true;
     }
-    if (contains(transcript, "日期") || contains(transcript, "今天")) {
+    if (query_equals(transcript, "今天日期") || query_equals(transcript, "今天几号") ||
+        query_equals(transcript, "当前日期") || query_equals(transcript, "今天是几号") ||
+        query_equals(transcript, "今天是几月几号") ||
+        query_equals(transcript, "今天的日期") ||
+        query_equals(transcript, "今天日期是多少") ||
+        query_equals(transcript, "今天是什么日期")) {
         out_command->type = AIQA_LOCAL_COMMAND_DATE_QUERY;
         return true;
     }

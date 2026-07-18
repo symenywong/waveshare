@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,6 +28,7 @@ typedef enum {
 typedef struct {
     bool supports_chat_stream;
     bool supports_reasoning_controls;
+    bool supports_device_intent_route;
     bool supports_data_uri_audio;
     bool requires_public_audio_url;
     bool supports_tts_stream;
@@ -52,6 +54,7 @@ typedef struct {
     const char *response_language;
     const char *conversation_context;
     const char *assistant_profile_context;
+    const struct tm *trusted_local_time;
 } aiqa_chat_options_t;
 
 typedef struct {

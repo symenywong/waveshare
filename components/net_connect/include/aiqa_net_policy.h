@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 #define AIQA_NET_MIN_VALID_UNIX_TIME 1704067200LL
+#define AIQA_NET_DEFAULT_TIMEZONE "CST-8"
 
 typedef struct {
     uint32_t connect_timeout_ms;

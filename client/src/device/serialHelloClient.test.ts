@@ -44,7 +44,10 @@ function makePort(responseChunks: readonly Uint8Array[]) {
   return { api, port, reader, writer, writes }
 }
 
-function helloResponse(): Uint8Array {
+function helloResponse(options: {
+  legacyAsr?: boolean
+  futureFields?: boolean
+} = {}): Uint8Array {
   return encodeManagementFrame(
     'response',
     encoder.encode(
@@ -57,6 +60,37 @@ function helloResponse(): Uint8Array {
           version: 1,
           maxFrameBytes: 4096,
           authentication: 'authentication_required',
+          diagnostics: {
+            snapshotVersion: 1,
+            runtimeReady: true,
+            runtimeStartPhase: 6,
+            runtimeStartStatus: 0,
+            boardInitPhase: 19,
+            generation: 17,
+            state: 'TRANSCRIBING',
+            error: 'NONE',
+            stateSequence: 29,
+            ...(options.futureFields ? { futureSnapshotField: true } : {}),
+            asr: {
+              requestEpoch: 31,
+              phase: 3,
+              status: 4,
+              httpStatus: 408,
+              transportStatus: -1,
+              ...(options.legacyAsr ? {} : { socketErrno: 116 }),
+              contentLength: -28679,
+              pcmBytes: 96000,
+              postBytes: 128123,
+              uploadedBytes: 128123,
+              ...(options.legacyAsr ? {} : { uploadWriteCalls: 43 }),
+              responseBytes: 0,
+              responseLimit: 4095,
+              headerWaitMs: 5001,
+              elapsedMs: 5210,
+              responseComplete: false,
+              ...(options.futureFields ? { futureAsrCounter: 99 } : {}),
+            },
+          },
         },
       }),
     ),
@@ -87,6 +121,9 @@ describe('SerialHelloClient', () => {
     const hello = await new SerialHelloClient(fixture.api).connectAndHello()
 
     expect(hello.authentication).toBe('authentication_required')
+    expect(hello.diagnostics?.asr.headerWaitMs).toBe(5001)
+    expect(hello.diagnostics?.asr.socketErrno).toBe(116)
+    expect(hello.diagnostics?.asr.uploadWriteCalls).toBe(43)
     expect(fixture.port.open).toHaveBeenCalledWith({ baudRate: 115200 })
     expect(fixture.port.setSignals).toHaveBeenCalledTimes(2)
     expect(fixture.port.setSignals).toHaveBeenLastCalledWith({
@@ -142,6 +179,45 @@ describe('SerialHelloClient', () => {
 
     await expect(new SerialHelloClient(fixture.api).connectAndHello()).resolves.toMatchObject({
       protocol: 'aiqa-management',
+    })
+  })
+
+  it('accepts an older hello response without diagnostics', async () => {
+    const response = encodeManagementFrame(
+      'response',
+      encoder.encode(
+        JSON.stringify({
+          v: 1,
+          id: 1,
+          ok: true,
+          result: {
+            protocol: 'aiqa-management',
+            version: 1,
+            maxFrameBytes: 4096,
+            authentication: 'authentication_required',
+          },
+        }),
+      ),
+    )
+    const fixture = makePort([response])
+
+    await expect(new SerialHelloClient(fixture.api).connectAndHello()).resolves.toMatchObject({
+      diagnostics: null,
+    })
+  })
+
+  it('accepts v1 diagnostics from the previous firmware and future scalar fields', async () => {
+    const fixture = makePort([
+      helloResponse({ legacyAsr: true, futureFields: true }),
+    ])
+
+    await expect(new SerialHelloClient(fixture.api).connectAndHello()).resolves.toMatchObject({
+      diagnostics: {
+        asr: {
+          socketErrno: 0,
+          uploadWriteCalls: 0,
+        },
+      },
     })
   })
 

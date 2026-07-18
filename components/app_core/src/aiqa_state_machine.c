@@ -57,6 +57,18 @@ void aiqa_state_machine_init(aiqa_state_machine_t *machine)
     machine->transition_count = 0;
 }
 
+bool aiqa_state_machine_asr_deadline_expired(
+    aiqa_state_t state,
+    uint32_t state_entered_ms,
+    uint32_t now_ms)
+{
+    if (state != AIQA_STATE_TRANSCRIBING &&
+        state != AIQA_STATE_ASR_JOB_PENDING) {
+        return false;
+    }
+    return now_ms - state_entered_ms >= AIQA_ASR_PHASE_TIMEOUT_MS;
+}
+
 aiqa_transition_t aiqa_state_machine_dispatch(aiqa_state_machine_t *machine, aiqa_event_t event)
 {
     if (machine == NULL) {

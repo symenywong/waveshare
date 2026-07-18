@@ -52,6 +52,9 @@ class ManagementProtocolTests(unittest.TestCase):
     def test_public_hello_reports_version_and_authentication_gate(self):
         self.run_case("hello")
 
+    def test_public_hello_diagnostics_is_fixed_schema_parameterless_and_content_free(self):
+        self.run_case("diagnostics")
+
     def test_unpaired_methods_and_unknown_fields_fail_closed(self):
         self.run_case("reject")
 

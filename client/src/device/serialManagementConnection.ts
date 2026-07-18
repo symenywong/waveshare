@@ -16,6 +16,7 @@ import type {
   SerialWriter,
 } from './serialHelloClient'
 import { setSerialPortIdle } from './serialHelloClient'
+import { helloDiagnosticsSchema } from './serialDiagnostics'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder('utf-8', { fatal: true })
@@ -27,6 +28,7 @@ const helloResultSchema = z
     version: z.literal(1),
     maxFrameBytes: z.literal(4096),
     authentication: z.literal('authentication_required'),
+    diagnostics: helloDiagnosticsSchema.optional().default(null),
   })
   .strict()
 

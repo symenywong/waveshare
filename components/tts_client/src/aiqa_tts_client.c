@@ -2,27 +2,31 @@
 #include "aiqa_tts_stream_buffer.h"
 
 #include "aiqa_provider.h"
+#include "aiqa_request_epoch.h"
 #include "esp_check.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "mbedtls/base64.h"
-
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 static const char *TAG = "aiqa_tts";
 
 #define AIQA_TTS_STREAM_CARRY_MAX_LEN (AIQA_TTS_AUDIO_BASE64_MAX_LEN + 4096u)
 #define AIQA_TTS_PCM_CHUNK_MAX_BYTES ((AIQA_TTS_AUDIO_BASE64_MAX_LEN * 3u) / 4u)
+#define AIQA_TTS_SOCKET_TIMEOUT_MS 5000u
 
-static StaticSemaphore_t s_active_client_mutex_storage;
-static SemaphoreHandle_t s_active_client_mutex;
-static esp_http_client_handle_t s_active_client;
+static aiqa_request_epoch_t s_request_epoch = AIQA_REQUEST_EPOCH_INITIALIZER;
+
+uint32_t aiqa_tts_request_epoch_capture(void)
+{
+    return aiqa_request_epoch_capture(&s_request_epoch);
+}
 
 typedef struct {
     char carry[AIQA_TTS_STREAM_CARRY_MAX_LEN];
@@ -35,42 +39,12 @@ typedef struct {
     aiqa_tts_audio_cb_t on_audio;
     void *user_ctx;
     aiqa_tts_result_t *result;
+    uint32_t request_epoch;
 } aiqa_tts_stream_context_t;
-
-static SemaphoreHandle_t active_client_mutex(void)
-{
-    if (s_active_client_mutex == NULL) {
-        s_active_client_mutex = xSemaphoreCreateMutexStatic(&s_active_client_mutex_storage);
-    }
-    return s_active_client_mutex;
-}
-
-static void set_active_client(esp_http_client_handle_t client)
-{
-    SemaphoreHandle_t mutex = active_client_mutex();
-    if (mutex == NULL) {
-        return;
-    }
-    if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE) {
-        s_active_client = client;
-        xSemaphoreGive(mutex);
-    }
-}
 
 void aiqa_tts_cancel_active_request(void)
 {
-    SemaphoreHandle_t mutex = active_client_mutex();
-    if (mutex == NULL) {
-        return;
-    }
-    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        return;
-    }
-    if (s_active_client != NULL) {
-        ESP_LOGW(TAG, "Cancelling active TTS request");
-        (void)esp_http_client_cancel_request(s_active_client);
-    }
-    xSemaphoreGive(mutex);
+    aiqa_request_epoch_cancel(&s_request_epoch);
 }
 
 static void set_stream_overflow(aiqa_tts_stream_context_t *context, const char *reason)
@@ -264,28 +238,66 @@ static void process_stream_remainder(aiqa_tts_stream_context_t *context)
     context->carry[0] = '\0';
 }
 
-static esp_err_t tts_http_event_handler(esp_http_client_event_t *event)
+static esp_err_t tts_write_all(
+    esp_http_client_handle_t client,
+    const char *data,
+    size_t length,
+    uint32_t request_epoch)
 {
-    if (event == NULL || event->user_data == NULL) {
-        return ESP_OK;
+    size_t offset = 0;
+    while (offset < length) {
+        if (!aiqa_request_epoch_is_current(&s_request_epoch, request_epoch)) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        const size_t remaining = length - offset;
+        const int chunk = remaining > (size_t)INT_MAX ? INT_MAX : (int)remaining;
+        const int written = esp_http_client_write(client, data + offset, chunk);
+        if (written <= 0) {
+            return ESP_FAIL;
+        }
+        offset += (size_t)written;
     }
-    if (event->event_id != HTTP_EVENT_ON_DATA || event->data == NULL || event->data_len <= 0) {
-        return ESP_OK;
-    }
-
-    aiqa_tts_stream_context_t *context = (aiqa_tts_stream_context_t *)event->user_data;
-    process_stream_chunk(context, (const char *)event->data, (size_t)event->data_len);
-    return context->abort_requested ? ESP_ERR_INVALID_STATE : ESP_OK;
+    return ESP_OK;
 }
 
-esp_err_t aiqa_tts_speak_streaming(
+static esp_err_t tts_read_stream(
+    esp_http_client_handle_t client,
+    aiqa_tts_stream_context_t *context,
+    uint32_t request_epoch)
+{
+    if (!aiqa_request_epoch_is_current(&s_request_epoch, request_epoch)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (esp_http_client_fetch_headers(client) < 0) {
+        return ESP_FAIL;
+    }
+    char chunk[512];
+    while (true) {
+        if (!aiqa_request_epoch_is_current(&s_request_epoch, request_epoch) ||
+            context->abort_requested) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        const int data_len = esp_http_client_read(client, chunk, sizeof(chunk));
+        if (data_len < 0) {
+            return ESP_FAIL;
+        }
+        if (data_len == 0) {
+            return ESP_OK;
+        }
+        process_stream_chunk(context, chunk, (size_t)data_len);
+    }
+}
+
+esp_err_t aiqa_tts_speak_streaming_with_epoch(
     const aiqa_config_t *config,
     const aiqa_secret_config_t *secrets,
     const char *text,
+    uint32_t request_epoch,
     aiqa_tts_audio_cb_t on_audio,
     void *user_ctx,
     aiqa_tts_result_t *result)
 {
+    const int64_t request_started_us = esp_timer_get_time();
     tts_result_reset(result);
     if (config == NULL || secrets == NULL || text == NULL || text[0] == '\0' || result == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -295,7 +307,6 @@ esp_err_t aiqa_tts_speak_streaming(
         result->status = AIQA_TTS_ERR_INVALID_ARG;
         return ESP_ERR_INVALID_ARG;
     }
-
     const aiqa_provider_caps_t *caps = aiqa_provider_caps_for(config->tts_provider);
     if (caps == NULL || !caps->supports_tts_stream) {
         result->status = AIQA_TTS_ERR_UNSUPPORTED_PROVIDER;
@@ -341,13 +352,17 @@ esp_err_t aiqa_tts_speak_streaming(
     stream->on_audio = on_audio;
     stream->user_ctx = user_ctx;
     stream->result = result;
+    stream->request_epoch = request_epoch;
+    ESP_LOGI(TAG,
+             "AIQA_DIAG tts_request epoch=%u text_bytes=%u request_bytes=%u",
+             (unsigned)request_epoch,
+             (unsigned)strlen(text),
+             (unsigned)strlen(request_body));
 
     esp_http_client_config_t http_config = {
         .url = endpoint_url,
         .method = HTTP_METHOD_POST,
-        .timeout_ms = AIQA_TTS_DEFAULT_TIMEOUT_MS,
-        .event_handler = tts_http_event_handler,
-        .user_data = stream,
+        .timeout_ms = AIQA_TTS_SOCKET_TIMEOUT_MS,
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
     esp_http_client_handle_t client = esp_http_client_init(&http_config);
@@ -384,7 +399,11 @@ esp_err_t aiqa_tts_speak_streaming(
         ret = esp_http_client_set_header(client, "Authorization", auth_header);
     }
     if (ret == ESP_OK) {
-        ret = esp_http_client_set_post_field(client, request_body, (int)strlen(request_body));
+        const size_t body_length = strlen(request_body);
+        ret = body_length <= (size_t)INT_MAX &&
+                      aiqa_request_epoch_is_current(&s_request_epoch, request_epoch)
+                  ? esp_http_client_open(client, (int)body_length)
+                  : ESP_ERR_INVALID_STATE;
     }
     if (ret == ESP_OK) {
         ESP_LOGI(TAG,
@@ -392,9 +411,10 @@ esp_err_t aiqa_tts_speak_streaming(
                  config->tts_model,
                  config->tts_voice,
                  (unsigned)strlen(text));
-        set_active_client(client);
-        ret = esp_http_client_perform(client);
-        set_active_client(NULL);
+        ret = tts_write_all(client, request_body, strlen(request_body), request_epoch);
+    }
+    if (ret == ESP_OK) {
+        ret = tts_read_stream(client, stream, request_epoch);
     }
 
     result->http_status = esp_http_client_get_status_code(client);
@@ -427,6 +447,17 @@ esp_err_t aiqa_tts_speak_streaming(
         }
     }
 
+    ESP_LOGI(TAG,
+             "AIQA_DIAG tts_response epoch=%u http=%d transport=%s status=%s audio_bytes=%u audio_chunks=%u stream_overflow=%d elapsed_ms=%u",
+             (unsigned)request_epoch,
+             result->http_status,
+             esp_err_to_name(ret),
+             aiqa_tts_status_name(result->status),
+             (unsigned)result->audio_bytes,
+             (unsigned)result->audio_chunks,
+             stream->overflow ? 1 : 0,
+             (unsigned)((esp_timer_get_time() - request_started_us) / 1000));
+    (void)esp_http_client_close(client);
     (void)esp_http_client_cleanup(client);
     secure_zero(auth_header, sizeof(auth_header));
     secure_zero(request_body, AIQA_TTS_REQUEST_MAX_LEN);
@@ -434,4 +465,22 @@ esp_err_t aiqa_tts_speak_streaming(
     free(request_body);
     free(stream);
     return ret == ESP_OK ? ESP_OK : ret;
+}
+
+esp_err_t aiqa_tts_speak_streaming(
+    const aiqa_config_t *config,
+    const aiqa_secret_config_t *secrets,
+    const char *text,
+    aiqa_tts_audio_cb_t on_audio,
+    void *user_ctx,
+    aiqa_tts_result_t *result)
+{
+    return aiqa_tts_speak_streaming_with_epoch(
+        config,
+        secrets,
+        text,
+        aiqa_tts_request_epoch_capture(),
+        on_audio,
+        user_ctx,
+        result);
 }

@@ -64,7 +64,7 @@ static const char *ui_status_for(aiqa_state_t state, aiqa_error_code_t error)
         case AIQA_ERROR_AUDIO_TOO_LONG:
             return "TOO LONG";
         case AIQA_ERROR_ASR_FAILED:
-            return "ASR";
+            return "VOICE ERR";
         case AIQA_ERROR_CHAT_FAILED:
             return "CHAT";
         case AIQA_ERROR_TIMEOUT:
@@ -121,7 +121,7 @@ static const char *ui_detail_for(aiqa_state_t state, aiqa_error_code_t error)
         case AIQA_ERROR_AUDIO_TOO_LONG:
             return "SHORTER";
         case AIQA_ERROR_ASR_FAILED:
-            return "VOICE";
+            return "RETRY";
         case AIQA_ERROR_CHAT_FAILED:
             return "MODEL";
         case AIQA_ERROR_TIMEOUT:
@@ -230,7 +230,7 @@ static board_wave_175c_pet_expression_t ui_expression_for(aiqa_state_t state, ai
         case AIQA_ERROR_CONFIG_MISSING:
             return BOARD_WAVE_175C_PET_EXPRESSION_SHY;
         case AIQA_ERROR_ASR_FAILED:
-            return BOARD_WAVE_175C_PET_EXPRESSION_SAD;
+            return BOARD_WAVE_175C_PET_EXPRESSION_CURIOUS;
         case AIQA_ERROR_CHAT_FAILED:
             return BOARD_WAVE_175C_PET_EXPRESSION_CRYING;
         case AIQA_ERROR_TIMEOUT:

@@ -1,4 +1,5 @@
 #include "aiqa_chat_protocol.h"
+#include "aiqa_datetime.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -231,12 +232,23 @@ aiqa_chat_status_t aiqa_chat_build_request_json(
     if (status != AIQA_CHAT_OK) {
         return status;
     }
-    char system_prompt[512];
+    char trusted_datetime_context[AIQA_DATETIME_TRUSTED_CONTEXT_MAX_LEN] = {0};
+    if (options->trusted_local_time != NULL &&
+        !aiqa_datetime_format_trusted_context(
+            options->trusted_local_time,
+            trusted_datetime_context,
+            sizeof(trusted_datetime_context))) {
+        return AIQA_CHAT_ERR_INVALID_ARG;
+    }
+    const bool has_trusted_datetime = trusted_datetime_context[0] != '\0';
+    char system_prompt[768];
     int prompt_written = snprintf(system_prompt,
                                   sizeof(system_prompt),
-                                  "%s %s",
+                                  "%s %s%s%s",
                                   PET_SYSTEM_PROMPT_BASE,
-                                  language_prompt_for_code(options->response_language));
+                                  language_prompt_for_code(options->response_language),
+                                  has_trusted_datetime ? " " : "",
+                                  has_trusted_datetime ? trusted_datetime_context : "");
     if (prompt_written < 0 || (size_t)prompt_written >= sizeof(system_prompt)) {
         return AIQA_CHAT_ERR_BUFFER_TOO_SMALL;
     }

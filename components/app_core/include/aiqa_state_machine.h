@@ -8,6 +8,8 @@
 extern "C" {
 #endif
 
+#define AIQA_ASR_PHASE_TIMEOUT_MS 35000u
+
 typedef enum {
     AIQA_STATE_BOOT = 0,
     AIQA_STATE_CONFIG_CHECK,
@@ -37,6 +39,10 @@ typedef struct {
 
 void aiqa_state_machine_init(aiqa_state_machine_t *machine);
 aiqa_transition_t aiqa_state_machine_dispatch(aiqa_state_machine_t *machine, aiqa_event_t event);
+bool aiqa_state_machine_asr_deadline_expired(
+    aiqa_state_t state,
+    uint32_t state_entered_ms,
+    uint32_t now_ms);
 const char *aiqa_state_name(aiqa_state_t state);
 
 #ifdef __cplusplus
